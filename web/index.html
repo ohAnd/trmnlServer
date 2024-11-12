@@ -1,0 +1,666 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <title>TRMNL - local webServer - Status Page</title>
+    <style>
+        body {
+            font-family: 'Roboto', sans-serif;
+        }
+
+        .topbar {
+            position: fixed;
+            top: 0;
+            left: 0px;
+            right: 0;
+            height: 40px;
+            background-color: #444;
+            color: white;
+            display: flex;
+            align-items: center;
+            padding: 10px 10px 0 10px;
+            box-sizing: border-box;
+            z-index: 1000;
+        }
+
+        .topbar-item {
+            display: flex;
+            align-items: center;
+            margin-bottom: 10px !important;
+            margin-right: auto;
+        }
+
+        .topbar .status-item {
+            margin-right: 20px;
+            display: flex;
+            align-items: center;
+        }
+
+        .topbar .status-item:first-child {
+            margin-left: auto;
+        }
+
+        .topbar .status-item .fas {
+            /* margin-right: 5px; */
+            margin-left: 5px;
+        }
+
+        .menu {
+            width: 200px;
+            position: fixed;
+            top: 0;
+            left: 0;
+            height: 100%;
+            background-color: #333;
+            padding-top: 40px;
+        }
+
+        .menu a {
+            padding: 10px 15px;
+            text-decoration: none;
+            font-size: 18px;
+            color: white;
+            display: block;
+        }
+
+        .menu a:hover {
+            background-color: #575757;
+        }
+
+        .menu a .icon {
+            margin-right: 10px;
+        }
+
+        .icon {
+            display: inline-block;
+            width: 20px;
+        }
+
+        .container {
+            display: flex;
+            flex-wrap: wrap;
+            margin-left: 220px;
+            /* Same as the width of the sidenav */
+            padding: 10px;
+            padding-top: 60px;
+            display: none;
+        }
+
+        .container.active {
+            display: block;
+        }
+
+        .section {
+            margin: 10px;
+            padding: 10px;
+            border: 1px solid #000;
+            border-radius: 5px;
+            flex: 1 1 300px;
+        }
+
+        .section h2 {
+            margin-top: 0;
+        }
+
+        .status-item p {
+            margin: 0;
+        }
+
+        .status-item {
+            display: flex;
+            align-items: center;
+            margin-bottom: 10px !important;
+        }
+
+        .status-name {
+            width: 200px;
+        }
+
+        .status-value {
+            width: 100px;
+            text-align: right;
+            margin-right: 20px !important;
+        }
+
+        .progress-bar {
+            width: 100%;
+            background-color: #f3f3f3;
+            border-radius: 5px;
+            overflow: hidden;
+        }
+
+        .progress-bar-inner {
+            height: 20px;
+            transition: width 0.9s ease-in-out;
+        }
+
+        .progress-bar-blue {
+            background-color: blue;
+        }
+
+        .progress-bar-green {
+            background-color: green;
+        }
+
+        @media (max-width: 768px) {
+            .menu {
+                width: 100%;
+                height: auto;
+                position: relative;
+            }
+
+            .menu a {
+                float: left;
+            }
+
+            .container {
+                margin-left: 0;
+            }
+        }
+
+        @media (max-width: 480px) {
+            .menu a {
+                text-align: center;
+                float: none;
+            }
+        }
+
+        /* log viewer */
+        .log-container {
+            height: 70vh;
+            overflow-y: auto;
+            border: 1px solid #ccc;
+            padding: 10px;
+        }
+
+        .log-entry {
+            margin: 10px 0;
+            padding: 10px;
+            border: 1px solid #ccc;
+            border-radius: 5px;
+        }
+
+        .timestamp {
+            font-weight: bold;
+        }
+
+        .context {
+            color: #007BFF;
+        }
+
+        .info {
+            color: #555;
+        }
+    </style>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
+</head>
+
+<body>
+    <div class="menu">
+        <a onclick="showContainer('container_home')"><span class="icon"><i class="fas fa-home"></i></span>Home</a>
+        <a onclick="showContainer('container_battery')"><span class="icon"><i class="fas fa-battery"></i></span>Client
+            stats</a>
+        <a onclick="showContainer('container_logs')"><span class="icon"><i class="fas fa-history"></i></span>Server
+            Logs</a>
+        <a onclick="showContainer('container_settings')"><span class="icon"><i
+                    class="fas fa-cog"></i></span>Settings</a>
+    </div>
+    <div class="topbar">
+        <div id="menu-button" class="topbar-item">
+            <i class="fas fa-bars"></i>
+        </div>
+        <div id="topbar-title" class="topbar-item">
+            <h3>TRMNL - local server </h3>
+        </div>
+        <div class="status-item">
+            <span id="top_uptime">0:00:00</span>
+            <i class="fas fa-clock"></i>
+        </div>
+        <div class="status-item">
+            <span id="top_battery">0%</span>
+            <i id="battery-icon" class="fas fa-battery-half"></i>
+        </div>
+        <div class="status-item">
+            <span id="top_wifi">0%</span>
+            <i id="wifi-icon" class="fas fa-wifi"></i>
+        </div>
+    </div>
+    <div class="container active" id="container_home">
+        <div class="section" id="server-side">
+            <h2>Server Status</h2>
+            <div class="status-item">
+                <p class="status-name">CPU Load:</p>
+                <p class="status-value"><span id="cpu-load"></span> %</p>
+                <div class="progress-bar">
+                    <div id="cpu-load-bar" class="progress-bar-inner progress-bar-blue" style="width: 0%;"></div>
+                </div>
+            </div>
+            <div class="status-item">
+                <p class="status-name">Current Time:</p>
+                <p><span id="current-time"></span></p>
+            </div>
+            <div class="status-item">
+                <p class="status-name">Uptime:</p>
+                <p><span id="uptime"></span></p>
+            </div>
+        </div>
+        <div class="section" id="client-side">
+            <h2>Client Status</h2>
+            <div class="status-item">
+                <p class="status-name">Battery State:</p>
+                <p class="status-value"><span id="battery-state"></span> %</p>
+                <div class="progress-bar">
+                    <div id="battery-state-bar" class="progress-bar-inner progress-bar-green" style="width: 0%;"></div>
+                </div>
+            </div>
+            <div class="status-item">
+                <p class="status-name">Battery Voltage:</p>
+                <p class="status-value"><span id="battery-voltage"></span> V</p>
+                <div class="progress-bar">
+                    <div id="battery-voltage-bar" class="progress-bar-inner progress-bar-green" style="width: 0%;">
+                    </div>
+                </div>
+            </div>
+            <div class="status-item">
+                <p class="status-name">WiFi Signal:</p>
+                <p class="status-value"><span id="wifi-signal"></span></p>
+                <div class="progress-bar">
+                    <div id="wifi-signal-bar" class="progress-bar-inner progress-bar-green" style="width: 0%;"></div>
+                </div>
+            </div>
+            <div class="status-item">
+                <p class="status-name">Refresh Time:</p>
+                <p class="status-value"><span id="refresh-time"></span> s</p>
+                <div class="progress-bar">
+                    
+                </div>
+            </div>
+            <div class="status-item">
+                <p class="status-name">Last Seen Update:</p>
+                <p><span id="last-contact"></span></p>
+            </div>
+        </div>
+    </div>
+    <div class="container" id="container_battery">
+        <h2>Client status - battery / wifi signal</h2>
+        <div id="genTimeFrameButtons"> </div>
+        <canvas id="batteryVoltageChart" width="400" height="100"></canvas>
+        <canvas id="rssiChart" width="400" height="100"></canvas>
+        <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+        <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns"></script>
+        <script>
+            const timeFrameButtons = `
+                <div>
+                    <button onclick="setTimeFrame('today')">Today</button>
+                    <button onclick="setTimeFrame('yesterday')">Yesterday</button>
+                    <label for="from">From:</label>
+                    <select id="from" onchange="setTimeFrame('custom')">
+                        ${generateOptions(1)}
+                    </select>
+                    <label for="to">To:</label>
+                    <select id="to" onchange="setTimeFrame('custom')">
+                        ${generateOptions()}
+                    </select>
+                </div>
+            `;
+            document.getElementById('genTimeFrameButtons').innerHTML = timeFrameButtons;
+
+            function generateOptions(start = 0) {
+                let options = '';
+                for (let i = start; i <= 10; i++) {
+                    const date = new Date();
+                    date.setDate(date.getDate() - i);
+                    options += `<option value="${date.toISOString().split('T')[0]}">${i} day(s) ago</option>`;
+                }
+                return options;
+            }
+
+            function setTimeFrame(timeFrame) {
+                let from, to;
+                const now = new Date();
+                if (timeFrame === 'today') {
+                    from = new Date(now.setHours(0, 0, 0, 0)).toISOString();
+                    to = new Date(now.setHours(23, 59, 59, 999)).toISOString();
+                } else if (timeFrame === 'yesterday') {
+                    from = new Date(now.setDate(now.getDate() - 1)).setHours(0, 0, 0, 0);
+                    from = new Date(from).toISOString();
+                    to = new Date(now.setHours(23, 59, 59, 999)).toISOString();
+                } else if (timeFrame === 'custom') {
+                    from = new Date(document.getElementById('from').value).toISOString();
+                    to = new Date(document.getElementById('to').value).toISOString();
+                    if (new Date(from) >= new Date(to)) {
+                        to = new Date().toISOString();
+                    }
+                }
+                renderBatteryVoltageChart(from, to);
+                renderRssiChart(from, to);
+            }
+
+            async function fetchBatteryData(from, to) {
+                const response = await fetch(`/server/battery?from=${from}&to=${to}`);
+                const data = await response.json();
+                return data;
+            }
+
+            let batteryVoltageChart;
+            async function renderBatteryVoltageChart(from, to) {
+                const batteryData = await fetchBatteryData(from, to);
+                const batterySocData = batteryData.map(entry => {
+                    const voltage = entry.battery_voltage;
+                    const soc = ((voltage - 3.3) / (4.85 - 3.3)) * 100;
+                    return soc;
+                });
+
+                const ctx = document.getElementById('batteryVoltageChart').getContext('2d');
+                if (batteryVoltageChart) {
+                    batteryVoltageChart.destroy();
+                }
+                batteryVoltageChart = new Chart(ctx, {
+                    type: 'line',
+                    data: {
+                        labels: batteryData.map(entry => entry.timestamp),
+                        datasets: [{
+                            label: 'Battery Voltage',
+                            data: batteryData.map(entry => entry.battery_voltage),
+                            borderColor: 'rgba(75, 192, 192, 1)',
+                            backgroundColor: 'rgba(75, 192, 192, 0.2)',
+                            fill: true,
+                            yAxisID: 'y-voltage',
+                        },
+                        {
+                            label: 'Battery SOC (%)',
+                            data: batterySocData,
+                            borderColor: 'rgba(255, 99, 132, 1)',
+                            backgroundColor: 'rgba(255, 99, 132, 0.2)',
+                            fill: true,
+                            yAxisID: 'y-soc',
+                        }]
+                    },
+                    options: {
+                        scales: {
+                            x: {
+                                type: 'time',
+                                time: {
+                                    unit: 'hour',
+                                    displayFormats: {
+                                        hour: 'dd.MM. HH:mm'
+                                    }
+                                }
+                            },
+                            'y-voltage': {
+                                beginAtZero: false,
+                                title: {
+                                    display: true,
+                                    text: 'Battery Voltage (V)'
+                                },
+                                position: 'left',
+                            },
+                            'y-soc': {
+                                beginAtZero: true,
+                                title: {
+                                    display: true,
+                                    text: 'Battery SOC (%)'
+                                },
+                                position: 'right',
+                                grid: {
+                                    drawOnChartArea: false,
+                                },
+                            }
+                        }
+                    }
+                });
+            }
+
+            let rssiChart;
+            async function renderRssiChart(from, to) {
+                const rssiData = await fetchBatteryData(from, to);
+                const ctx = document.getElementById('rssiChart').getContext('2d');
+                if (rssiChart) {
+                    rssiChart.destroy();
+                }
+                rssiChart = new Chart(ctx, {
+                    type: 'line',
+                    data: {
+                        labels: rssiData.map(entry => entry.timestamp),
+                        datasets: [{
+                            label: 'WiFi Signal Strength (dBm)',
+                            data: rssiData.map(entry => entry.rssi),
+                            borderColor: 'rgba(75, 192, 192, 1)',
+                            backgroundColor: 'rgba(75, 192, 192, 0.2)',
+                            fill: true,
+                            yAxisID: 'y-rssi',
+                        },
+                        {
+                            label: 'WiFi Signal Strength (%)',
+                            data: rssiData.map(entry => getWifiStrength(entry.rssi)),
+                            borderColor: 'rgba(255, 99, 132, 1)',
+                            backgroundColor: 'rgba(255, 99, 132, 0.2)',
+                            fill: true,
+                            yAxisID: 'y-strength',
+                        }]
+                    },
+                    options: {
+                        scales: {
+                            x: {
+                                type: 'time',
+                                time: {
+                                    unit: 'hour',
+                                    displayFormats: {
+                                        hour: 'dd.MM. HH:mm'
+                                    }
+                                }
+                            },
+                            'y-rssi': {
+                                beginAtZero: false,
+                                title: {
+                                    display: true,
+                                    text: 'RSSI (dBm)'
+                                }
+                            },
+                            'y-strength': {
+                                beginAtZero: false,
+                                title: {
+                                    display: true,
+                                    text: 'Wifi Strength (%)'
+                                },
+                                position: 'right'
+                            }
+                        }
+                    }
+                });
+            }
+
+            setTimeFrame('today');
+
+            function refreshCharts() {
+                setTimeFrame('custom');
+            }
+
+            setInterval(refreshCharts, 60000); // Refresh charts every minute
+        </script>
+    </div>
+    <div class="container" id="container_logs">
+        <h2>Server Logs</h2>
+        <div id="log-container" class="log-container"></div>
+    </div>
+    <div class="container" id="container_settings">
+        <h2>Settings</h2>
+        <div class="section">
+            <h3>Client Refresh Time</h3>
+            <div class="status-item">
+                <p class="status-name">Current Refresh Time:</p>
+                <p class="status-value"><span id="current-refresh-rate"></span> s</p>
+            </div>
+            <div class="status-item">
+                <label for="refresh-time-input">Set Refresh Time (s):</label>
+                <input type="number" id="refresh-time-input" min="10" step="10">
+                <button onclick="updateRefreshRate()">Update</button>
+            </div>
+        </div>
+        <div class="section">
+            <h3>Local BMP File Path</h3>
+            <div class="status-item">
+                <p class="status-name">Current BMP Path:</p>
+                <p class="status-value"><span id="current-bmp-path"></span></p>
+            </div>
+            <div class="status-item">
+                <label for="bmp-path-input">Set BMP Path:</label>
+                <input type="text" id="bmp-path-input">
+                <button onclick="updateBmpPath()">Update</button>
+            </div>
+        </div>
+        <script>
+            async function fetchSettings() {
+                const response = await fetch('/settings');
+                const data = await response.json();
+                document.getElementById('current-refresh-rate').innerText = data.config_refresh_time;
+                document.getElementById('current-bmp-path').innerText = data.config_image_path;
+                document.getElementById('refresh-time-input').value = data.config_refresh_time;
+                document.getElementById('bmp-path-input').value = data.config_image_path;
+            }
+
+            async function updateRefreshRate() {
+                const refreshRate = document.getElementById('refresh-time-input').value;
+                await fetch('/settings/refreshtime', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ refresh_rate: refreshRate })
+                });
+                fetchSettings();
+            }
+
+            async function updateBmpPath() {
+                const bmpPath = document.getElementById('bmp-path-input').value;
+                await fetch('/settings/imagepath', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ bmp_path: bmpPath })
+                });
+                fetchSettings();
+            }
+
+            fetchSettings();
+        </script>
+    </div>
+    <script>
+        function showContainer(containerId) {
+            // Hide all containers
+            const containers = document.querySelectorAll('.container');
+            containers.forEach(container => {
+                container.classList.remove('active');
+            });
+
+            // Show the selected container
+            const selectedContainer = document.getElementById(containerId);
+            selectedContainer.classList.add('active');
+        }
+
+        function getWifiStrength(rssi) {
+            var quality = 0;
+            if (rssi <= -100) {
+                quality = 0;
+            } else if (rssi >= -50) {
+                quality = 100;
+            } else {
+                quality = 2 * (rssi + 100);
+            }
+            return quality;
+        }
+
+        async function fetchStatus() {
+            const response = await fetch('/status');
+            const data = await response.json();
+            document.getElementById('cpu-load').innerText = data.server.cpu_load;
+            document.getElementById('cpu-load-bar').style.width = data.server.cpu_load + '%';
+
+            document.getElementById('current-time').innerText = data.server.current_time;
+            document.getElementById('uptime').innerText = data.server.uptime;
+            document.getElementById('top_uptime').innerText = data.server.uptime;
+
+            document.getElementById('battery-state').innerText = data.client.battery_state;
+            document.getElementById('battery-state-bar').style.width = data.client.battery_state + '%';
+            document.getElementById('top_battery').innerText = Math.round(data.client.battery_state) + " %";
+            // battery-icon according to battery state
+            const batteryIcon = document.getElementById('battery-icon');
+            if (data.client.battery_state >= 75) {
+                batteryIcon.className = 'fas fa-battery-full';
+            } else if (data.client.battery_state >= 50) {
+                batteryIcon.className = 'fas fa-battery-three-quarters';
+            } else if (data.client.battery_state >= 25) {
+                batteryIcon.className = 'fas fa-battery-half';
+            } else {
+                batteryIcon.className = 'fas fa-battery-quarter';
+            }
+            document.getElementById('battery-voltage').innerText = data.client.battery_voltage;
+            document.getElementById('battery-voltage-bar').style.width = ((data.client.battery_voltage / 4.7) * 100) + '%';
+
+            document.getElementById('wifi-signal').innerHTML = data.client.wifi_signal + " dBm";
+            document.getElementById('wifi-signal-bar').style.width = getWifiStrength(data.client.wifi_signal) + '%';
+            document.getElementById('top_wifi').innerText = getWifiStrength(data.client.wifi_signal) + " %";
+            // wifi-icon according to signal strength
+            const wifiIcon = document.getElementById('wifi-icon');
+            if (getWifiStrength(data.client.wifi_signal) >= 75) {
+                wifiIcon.className = 'fas fa-wifi'; // todo
+            } else if (getWifiStrength(data.client.wifi_signal) >= 50) {
+                wifiIcon.className = 'fas fa-wifi'; // todo
+            } else if (getWifiStrength(data.client.wifi_signal) >= 25) {
+                wifiIcon.className = 'fas fa-wifi'; // todo
+            } else {
+                wifiIcon.className = 'fas fa-wifi'; // todo
+            }
+
+            document.getElementById('refresh-time').innerText = data.client.refresh_time;
+            const lastContactDate = new Date(data.client.last_contact * 1000);
+            document.getElementById('last-contact').innerText = lastContactDate.toLocaleString();
+        }
+
+        async function fetchLogs() {
+            const response = await fetch('/server/log');
+            const logs = await response.text();
+            const logContainer = document.getElementById('log-container');
+            logContainer.innerHTML = '';
+
+            logs.split('\n').forEach(log => {
+                if (log.trim()) {
+                    const logEntry = document.createElement('div');
+                    logEntry.className = 'log-entry';
+                    const [timestamp, context, info] = log.split(' -- ');
+                    logEntry.innerHTML = `
+                    <div class="timestamp">${timestamp}</div>
+                    <div class="context">${context}</div>
+                    <div class="info">${info}</div>
+                `;
+                    logContainer.appendChild(logEntry);
+                }
+            });
+        }
+
+        let logScrollInterval;
+
+        function checkLogsContainer() {
+            const logsContainer = document.getElementById('container_logs');
+            if (logsContainer.classList.contains('active')) {
+                fetchLogs();
+                if (!logScrollInterval) {
+                    logScrollInterval = setInterval(() => {
+                        const logContainer = document.getElementById('log-container');
+                        logContainer.scrollTop = logContainer.scrollHeight;
+                    }, 10000);
+                }
+            } else {
+                clearInterval(logScrollInterval);
+                logScrollInterval = null;
+            }
+        }
+        setInterval(checkLogsContainer, 1000);
+
+        setInterval(fetchStatus, 5000);
+        fetchStatus();
+    </script>
+</body>
+
+</html>

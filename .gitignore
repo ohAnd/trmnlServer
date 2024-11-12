@@ -1,0 +1,6 @@
+trmnl_log.json
+db/clientData.txt
+logs/server.log
+ssl/cert.pem
+config.yaml
+ssl/key.pem
