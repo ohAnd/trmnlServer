@@ -110,6 +110,9 @@ def reading_client_data():
                     'timestamp': timestamp
                 }
                 client_data_db_read.append(entry)
+    # combine client_data_db and client_data_db_read only if more than 1 entry in client_data_db
+    if len(client_data_db) > 1:
+        client_data_db_read.extend(client_data_db)
     # sort data in client_data_db by timestamp
     client_data_db_read = sorted(client_data_db_read, key=lambda x: x['timestamp'])
     return client_data_db_read
