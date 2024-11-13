@@ -14,6 +14,9 @@ app = Flask(__name__)
 start_time = time.time()
 current_dir = os.path.dirname(os.path.abspath(__file__))
 
+battery_max_voltage = 5
+battery_min_voltage = 2
+
 ## persistance
 
 # List to store logs
@@ -25,7 +28,7 @@ db_file = os.path.join(current_dir, 'db/clientData.txt')
 
 client_data = {
     'refresh_rate': 900,
-    'battery_voltage': 4.76,
+    'battery_voltage': battery_max_voltage,
     'rssi': -100,
     'last_contact': 0
 }
@@ -125,10 +128,14 @@ if os.path.exists(config_file):
         config = yaml.safe_load(f)
         config_image_path = config['image_path']
         config_refresh_time = config['refresh_time']
+        battery_max_voltage = config['battery_max_voltage']
+        battery_min_voltage = config['battery_min_voltage']
 else:
     config = {
         'image_path': 'images/screen.bmp',
-        'refresh_time': 900
+        'refresh_time': 900,
+        'battery_max_voltage': 4.76,
+        'battery_min_voltage': 3.3
     }
     with open(config_file, 'w') as f:
         yaml.safe_dump(config, f)
@@ -334,6 +341,12 @@ def get_status():
         client_data['rssi'] = client_data_db_read[-1]['rssi']
         client_data['last_contact'] = client_data_db_read[-1]['timestamp']
     
+    battery_state = round(((float(client_data['battery_voltage']) - battery_min_voltage) / (battery_max_voltage - battery_min_voltage)) * 100, 1)
+    if battery_state > 100:
+        battery_state = 100
+    elif battery_state < 0:
+        battery_state = 0
+
     return jsonify({
         'server': {
             'uptime': uptime_str,
@@ -342,7 +355,9 @@ def get_status():
         },
         'client': {
             'battery_voltage': round(client_data['battery_voltage'], 2),
-            'battery_state': round(((float(client_data['battery_voltage']) - 3.3) / (4.76 - 3.3)) * 100, 1),
+            'battery_voltage_max': battery_max_voltage,
+            'battery_voltage_min': battery_min_voltage,
+            'battery_state': battery_state,
             'wifi_signal': client_data['rssi'],
             'refresh_time': client_data['refresh_rate'],
             'last_contact': client_data['last_contact']

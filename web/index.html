@@ -196,6 +196,11 @@
 </head>
 
 <body>
+    <script>
+        // global variables for battery_max and battery_min
+        let battery_max = 5;
+        let battery_min = 2.5;
+    </script>
     <div class="menu">
         <a onclick="showContainer('container_home')"><span class="icon"><i class="fas fa-home"></i></span>Home</a>
         <a onclick="showContainer('container_battery')"><span class="icon"><i class="fas fa-battery"></i></span>Client
@@ -347,7 +352,12 @@
                 const batteryData = await fetchBatteryData(from, to);
                 const batterySocData = batteryData.map(entry => {
                     const voltage = entry.battery_voltage;
-                    const soc = ((voltage - 3.3) / (4.85 - 3.3)) * 100;
+                    const soc = ((voltage - battery_min) / (battery_max - battery_min)) * 100;
+                    if(soc < 0) {
+                        return 0;
+                    } else if(soc > 100) {
+                        return 100;
+                    }
                     return soc;
                 });
 
@@ -581,6 +591,9 @@
             document.getElementById('uptime').innerText = data.server.uptime;
             document.getElementById('top_uptime').innerText = data.server.uptime;
 
+            battery_max = data.client.battery_voltage_max;
+            battery_min = data.client.battery_voltage_min;
+
             document.getElementById('battery-state').innerText = data.client.battery_state;
             document.getElementById('battery-state-bar').style.width = data.client.battery_state + '%';
             document.getElementById('top_battery').innerText = Math.round(data.client.battery_state) + " %";
@@ -596,7 +609,7 @@
                 batteryIcon.className = 'fas fa-battery-quarter';
             }
             document.getElementById('battery-voltage').innerText = data.client.battery_voltage;
-            document.getElementById('battery-voltage-bar').style.width = ((data.client.battery_voltage / 4.7) * 100) + '%';
+            document.getElementById('battery-voltage-bar').style.width = ((data.client.battery_voltage / battery_max) * 100) + '%';
 
             document.getElementById('wifi-signal').innerHTML = data.client.wifi_signal + " dBm";
             document.getElementById('wifi-signal-bar').style.width = getWifiStrength(data.client.wifi_signal) + '%';
