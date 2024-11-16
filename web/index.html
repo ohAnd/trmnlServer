@@ -285,6 +285,67 @@
                 <p><span id="last-contact"></span></p>
             </div>
         </div>
+
+    <style>
+        .image-container {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            flex-direction: column;
+            width: 49%;
+            max-width: 800px;
+            margin: 10px;
+            border: 1px solid #ccc;
+            border-radius: 10px;
+            overflow: hidden;
+            padding: 5px;
+
+        }
+
+        .image-container p {
+            margin: 5px;
+            padding: 5px;
+            background-color: #f3f3f3;
+            border-radius: 5px;
+            text-align: center;
+            width: 98%;
+        }
+
+        .image-container img {
+            width: 100%;
+            height: auto;
+            border: 1px solid #d8d8d8;
+            border-radius: 5px;
+        }
+
+        .images-wrapper {
+            display: flex;
+            justify-content: space-around;
+            margin: 10px;
+        }
+
+        @media (max-width: 768px) {
+            .images-wrapper {
+            flex-direction: column;
+            align-items: center;
+            flex-wrap: wrap;
+            }
+
+            .image-container {
+            width: 80%;
+            }
+        }
+    </style>
+    <div class="images-wrapper">
+        <div class="image-container">
+            <p>Last Input Image</p>
+            <img id="last_shown_original" src="" alt="last shwon Image">
+        </div>
+        <div class="image-container">
+            <p>Last Shown Image <i id="image_adapted">Adapted</i></p>
+            <img id="last_shown_adapated" src="" alt="last shwon Image adapted">
+        </div>
+    </div>
     </div>
     <div class="container" id="container_battery">
         <h2>Client status - battery / wifi signal</h2>
@@ -519,14 +580,32 @@
                 <button onclick="updateBmpPath()">Update</button>
             </div>
         </div>
+        <div class="section">
+            <h3>manipulation of given BMP image</h3>
+            <div class="status-item">
+                <p class="status-name">Current setup:</p>
+                <p class="status-value"><span id="current-manipulation-state"></span></p>
+            </div>
+            <div class="status-item">
+                <label for="current-manipulation-input">Enable Image Manipulation:</label>
+                <input type="checkbox" id="current-manipulation-input" onchange="updateImageModification()">
+            </div>
+        </div>
         <script>
             async function fetchSettings() {
                 const response = await fetch('/settings');
                 const data = await response.json();
                 document.getElementById('current-refresh-rate').innerText = data.config_refresh_time;
-                document.getElementById('current-bmp-path').innerText = data.config_image_path;
                 document.getElementById('refresh-time-input').value = data.config_refresh_time;
+
+                document.getElementById('current-bmp-path').innerText = data.config_image_path;
                 document.getElementById('bmp-path-input').value = data.config_image_path;
+
+                document.getElementById('current-manipulation-input').checked = data.config_manipulate_image;
+                if(!data.config_manipulate_image)
+                    document.getElementById('image_adapted').style.display = 'none';
+                else
+                    document.getElementById('image_adapted').style.display = 'inline';
             }
 
             async function updateRefreshRate() {
@@ -549,6 +628,18 @@
                         'Content-Type': 'application/json'
                     },
                     body: JSON.stringify({ bmp_path: bmpPath })
+                });
+                fetchSettings();
+            }
+
+            async function updateImageModification() {
+                const image_mod = document.getElementById('current-manipulation-input').checked;
+                await fetch('/settings/image_modification', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ image_modification: image_mod })
                 });
                 fetchSettings();
             }
@@ -612,15 +703,15 @@
             document.getElementById('battery-voltage-bar').style.width = ((data.client.battery_voltage / battery_max) * 100) + '%';
 
             document.getElementById('wifi-signal').innerHTML = data.client.wifi_signal + " dBm";
-            document.getElementById('wifi-signal-bar').style.width = getWifiStrength(data.client.wifi_signal) + '%';
-            document.getElementById('top_wifi').innerText = getWifiStrength(data.client.wifi_signal) + " %";
+            document.getElementById('wifi-signal-bar').style.width = data.client.wifi_signal_strength + '%';
+            document.getElementById('top_wifi').innerText = data.client.wifi_signal_strength + " %";
             // wifi-icon according to signal strength
             const wifiIcon = document.getElementById('wifi-icon');
-            if (getWifiStrength(data.client.wifi_signal) >= 75) {
+            if (data.client.wifi_signal_strength >= 75) {
                 wifiIcon.className = 'fas fa-wifi'; // todo
-            } else if (getWifiStrength(data.client.wifi_signal) >= 50) {
+            } else if (data.client.wifi_signal_strength >= 50) {
                 wifiIcon.className = 'fas fa-wifi'; // todo
-            } else if (getWifiStrength(data.client.wifi_signal) >= 25) {
+            } else if (data.client.wifi_signal_strength >= 25) {
                 wifiIcon.className = 'fas fa-wifi'; // todo
             } else {
                 wifiIcon.className = 'fas fa-wifi'; // todo
@@ -629,6 +720,9 @@
             document.getElementById('refresh-time').innerText = data.client.refresh_time;
             const lastContactDate = new Date(data.client.last_contact * 1000);
             document.getElementById('last-contact').innerText = lastContactDate.toLocaleString();
+
+            document.getElementById('last_shown_original').src = data.client.current_image_url;
+            document.getElementById('last_shown_adapated').src = data.client.current_image_url_adapted;
         }
 
         async function fetchLogs() {

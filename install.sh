@@ -39,10 +39,11 @@ After=network.target
 ExecStart=/usr/bin/python3 ${PYTHON_SCRIPT_PATH}
 WorkingDirectory=${WORKING_DIRECTORY}
 StandardOutput=file:/var/log/trmnlServer.log
-StandardError=file:/var/log/trmnlServer.log
+StandardError=file:/var/log/trmnlServer_error.log
 Restart=always
-User=${USER}
-Group=${GROUP}
+# User=${USER}
+# Group=${GROUP}
+User=root
 Environment=PYTHONUNBUFFERED=1
 
 [Install]

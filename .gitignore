@@ -4,3 +4,4 @@ logs/server.log
 ssl/cert.pem
 config.yaml
 ssl/key.pem
+db/clientLog.txt

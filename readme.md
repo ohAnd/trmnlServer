@@ -14,16 +14,17 @@ change to: ```#define API_BASE_URL "https://<your_ip>:83" ```
 ## Features
 
 - **Serve BMP Images**: Provides endpoints to serve BMP images.
+- **manipulate BMP Images**: provide an adpated new image with the collected data from client (wifi strength, battery state)
 - **API for Display**: Endpoint to retrieve display information and update settings.
 - **Logging**: Logs requests with timestamps and context.
 - **Configuration Management**: Allows updating and retrieving configuration settings via API.
 - **Firmware Update**: Placeholder for firmware update functionality.
 
-<img src="doc/home.png" alt="Home Screen" width="500">
-<img src="doc/client.png" alt="Home Screen" width="500">
+<img src="doc/home.png" alt="Home Screen" width="500" height="300">
+<img src="doc/client.png" alt="Home Screen" width="500" height="300">
 
-<img src="doc/server.png" alt="Home Screen" width="500">
-<img src="doc/settings.png" alt="Home Screen" width="500">
+<img src="doc/server.png" alt="Home Screen" width="500" height="300">
+<img src="doc/settings.png" alt="Home Screen" width="500" height="300">
 
 ## Endpoints
 
