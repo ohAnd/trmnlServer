@@ -224,6 +224,7 @@
         <div class="status-item">
             <span id="top_battery">0%</span>
             <i id="battery-icon" class="fas fa-battery-half"></i>
+            <i id="battery-icon-charge" class="fas fa-bolt" style="position: absolute; transform: translateX(25%);"></i>
         </div>
         <div class="status-item">
             <span id="top_wifi">0%</span>
@@ -685,22 +686,42 @@
             battery_max = data.client.battery_voltage_max;
             battery_min = data.client.battery_voltage_min;
 
-            document.getElementById('battery-state').innerText = data.client.battery_state;
-            document.getElementById('battery-state-bar').style.width = data.client.battery_state + '%';
-            document.getElementById('top_battery').innerText = Math.round(data.client.battery_state) + " %";
             // battery-icon according to battery state
             const batteryIcon = document.getElementById('battery-icon');
-            if (data.client.battery_state >= 75) {
+            const batteryChargeIcon = document.getElementById('battery-icon-charge');
+            batteryChargeIcon.className = '';
+            let charging = false;
+            if (data.client.battery_state == 255) {
+                batteryIcon.className = 'fas fa-battery-empty';
+                // additional flash icon for charging
+                batteryChargeIcon.className = 'fas fa-bolt';
+                charging = true;
+            }
+            else if (data.client.battery_state >= 75) {
                 batteryIcon.className = 'fas fa-battery-full';
             } else if (data.client.battery_state >= 50) {
                 batteryIcon.className = 'fas fa-battery-three-quarters';
             } else if (data.client.battery_state >= 25) {
                 batteryIcon.className = 'fas fa-battery-half';
             } else {
-                batteryIcon.className = 'fas fa-battery-quarter';
+                batteryIcon.className = 'fas fa-battery-empty';
             }
             document.getElementById('battery-voltage').innerText = data.client.battery_voltage;
-            document.getElementById('battery-voltage-bar').style.width = ((data.client.battery_voltage / battery_max) * 100) + '%';
+            if(charging) {
+                document.getElementById('battery-voltage-bar').style.width = '100%';
+            } else {
+                document.getElementById('battery-voltage-bar').style.width = ((data.client.battery_voltage / battery_max) * 100) + '%';
+            }
+
+            if(charging)
+                document.getElementById('battery-state').innerText = "100";
+            else
+                document.getElementById('battery-state').innerText = data.client.battery_state;
+            document.getElementById('battery-state-bar').style.width = data.client.battery_state + '%';
+            if(charging)
+                document.getElementById('top_battery').innerText = " ";
+            else
+                document.getElementById('top_battery').innerText = Math.round(data.client.battery_state) + " %";
 
             document.getElementById('wifi-signal').innerHTML = data.client.wifi_signal + " dBm";
             document.getElementById('wifi-signal-bar').style.width = data.client.wifi_signal_strength + '%';

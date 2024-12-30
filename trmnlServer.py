@@ -17,8 +17,8 @@ app = Flask(__name__)
 start_time = time.time()
 current_dir = os.path.dirname(os.path.abspath(__file__))
 
-battery_max_voltage = 5
-battery_min_voltage = 2
+battery_max_voltage = 4.1
+battery_min_voltage = 2.3
 
 #########################################################################################################
 ## persistance
@@ -157,8 +157,8 @@ else:
         'image_path': 'images/screen.bmp',
         'image_modification': True,        
         'refresh_time': 900,
-        'battery_max_voltage': 4.76,
-        'battery_min_voltage': 3.3
+        'battery_max_voltage': 4.1,
+        'battery_min_voltage': 2.3
     }
     with open(config_file, 'w') as f:
         yaml.safe_dump(config, f)
@@ -171,6 +171,7 @@ else:
 # In-memory object to store the last sent image as a blob
 current_orig_image = None
 current_send_image = None
+
 def getBatteryIcon(battery):
     battery = int(battery)
     if battery > 80:
@@ -190,8 +191,11 @@ def add_footer_to_image(src_image, wifi_percentage, battery_percentage):
     footer_height = 35
     # Resize the source image to make space for the footer
     img = img.crop((0, 0, img.width, img.height - footer_height))
+    
+    # define appearance
+    background = 1 # white - 1 black
     # Create a new image with extra space for the footer
-    new_img = Image.new('1', (img.width, img.height + footer_height), color=0)  # '1' mode for 1-bit pixels, black and white
+    new_img = Image.new('1', (img.width, img.height + footer_height), color=1 - background)  # '1' mode for 1-bit pixels, black and white
     
     # Paste the original image onto the new image
     new_img.paste(img, (0, 0))
@@ -202,33 +206,52 @@ def add_footer_to_image(src_image, wifi_percentage, battery_percentage):
     # Load fonts
     try:
         icon_font = ImageFont.truetype("web/fontawesome-webfont.ttf", 24)
-        text_font = ImageFont.truetype("DejaVuSans.ttf", 14)
+        # text_font = ImageFont.truetype("DejaVuSans.ttf", 14)
+        text_font = ImageFont.truetype("DejaVuSans-Bold.ttf", 14)
     except IOError:
         icon_font = ImageFont.load_default()
         text_font = ImageFont.load_default()
-    
+        
     # Define positions
     text_line_height = 7
     symbol_line_height = 4
-    wifi_icon_position = (10, img.height + symbol_line_height)
+    wifi_icon_position = (18, img.height + symbol_line_height)
     wifi_text_position = (50, img.height + text_line_height)
-    battery_icon_position = (100, img.height + symbol_line_height)
+    battery_icon_position = (104, img.height + symbol_line_height)
     battery_text_position = (140, img.height + text_line_height)
-    date_time_position = (img.width - 130, img.height + text_line_height)
+    date_time_position = (img.width - 155, img.height + text_line_height)
+    
+    # draw line if backgorund = white
+    if background == 0:
+        d.line([(0, img.height + 1), (img.width, img.height + 1)], fill=0, width=2)
+    else:
+        width_left_side = 142
+        if battery_percentage == 255:
+            width_left_side = 100            
+        # draw white rounded rectangle for left and right side
+        d.rounded_rectangle([-10, img.height + 3, wifi_text_position[0] + width_left_side, img.height + footer_height + 5], fill=1, radius=5)
+        d.rounded_rectangle([date_time_position[0] - 8, img.height + 3, 810, img.height + footer_height + 5], fill=1, radius=5)
+        background = 0
+        
     
     # Draw WiFi icon and percentage
     wifi_icon = "\uf1eb"
-    d.text(wifi_icon_position, wifi_icon, fill=1, font=icon_font)  # fill=1 for white
-    d.text(wifi_text_position, f"{round(wifi_percentage)}%", fill=1, font=text_font)  # fill=1 for white
+    d.text(wifi_icon_position, wifi_icon, fill=background, font=icon_font)  # fill=1 for white
+    d.text(wifi_text_position, f"{round(wifi_percentage)} %", fill=background, font=text_font)  # fill=1 for white
     
     # Draw battery icon and percentage
     battery_icon = getBatteryIcon(battery_percentage)
-    d.text(battery_icon_position, battery_icon, fill=1, font=icon_font)  # fill=1 for white
-    d.text(battery_text_position, f"{round(battery_percentage)}%", fill=1, font=text_font)  # fill=1 for white
+    
+    if battery_percentage == 255:
+        d.text(battery_icon_position, "\uf244", fill=background, font=icon_font)  # fill=1 for white
+        d.text((battery_icon_position[0] + 10 , battery_icon_position[1]), "\uf0e7", fill=background, font=icon_font)  # fill=1 for white
+    else:
+        d.text(battery_icon_position, battery_icon, fill=background, font=icon_font)  # fill=1 for white
+        d.text(battery_text_position, f"{round(battery_percentage)} %", fill=background, font=text_font)  # fill=1 for white
     
     # Draw date and time
     date_time = datetime.datetime.now().strftime("%d.%m.%Y %H:%M")
-    d.text(date_time_position, date_time, fill=1, font=text_font)  # fill=1 for white
+    d.text(date_time_position, date_time, fill=background, font=text_font)  # fill=1 for white
     
     # Save the new image as BMP
     # Save the new image to a BytesIO object
@@ -299,6 +322,8 @@ print(f"Server is running on IP: {server_ip}")
 
 # calculate battery state
 def getBatteryState(battery_voltage):
+    if float(battery_voltage) > 4.6: # is chharging
+        return 255
     battery_state = round(((float(battery_voltage) - battery_min_voltage) / (battery_max_voltage - battery_min_voltage)) * 100, 1)
     if battery_state > 100:
         battery_state = 100
@@ -616,7 +641,20 @@ def handle_exit(signum, frame):
 signal.signal(signal.SIGINT, handle_exit)
 signal.signal(signal.SIGTERM, handle_exit)
 
+from werkzeug.serving import WSGIRequestHandler
+
+class SSLRequestHandler(WSGIRequestHandler):
+    def handle(self):
+        try:
+            super().handle()
+        except ssl.SSLError as e:
+            if e.reason == 'PROTOCOL_IS_SHUTDOWN':
+                pass  # Ignore SSL protocol shutdown errors
+            else:
+                raise
+
 if __name__ == '__main__':
+    WSGIRequestHandler = SSLRequestHandler
     bmp_send_switch = True
     # Generate a self-signed certificate and key
     cert_file = os.path.join(current_dir, 'ssl/cert.pem')
