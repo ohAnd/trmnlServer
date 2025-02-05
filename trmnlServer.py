@@ -21,6 +21,7 @@ Modules:
 import datetime
 import ssl
 import os
+import sys
 import time
 from datetime import timedelta
 from collections import deque
@@ -242,11 +243,11 @@ else:
         'battery_max_voltage': 4.1,
         'battery_min_voltage': 2.3
     }
-    with open(config_file, 'w', encoding='utf-8') as config_f:
-        yaml.safe_dump(config, config_f)
+    with open(config_file, 'w', encoding='utf-8') as config_file_handle:
+        yaml.safe_dump(config, config_file_handle)
     print("Config file not found. Created a new one with default values.")
     print("Please restart the server after configuring the settings in config.yaml")
-    exit(0)
+    sys.exit(0)
 
 ###################################################################################################
 ## bmp modification
@@ -261,14 +262,13 @@ def get_battery_icon(battery):
     battery = int(battery)
     if battery > 80:
         return "\uf240"
-    elif battery > 60:
+    if battery > 60:
         return "\uf241"
-    elif battery > 40:
+    if battery > 40:
         return "\uf242"
-    elif battery > 20:
+    if battery > 20:
         return "\uf243"
-    else:
-        return "\uf244"
+    return "\uf244"
 
 # Modify the footer background to black and the font to white
 def add_footer_to_image(src_image, wifi_percentage, battery_percentage):
@@ -322,7 +322,7 @@ def add_footer_to_image(src_image, wifi_percentage, battery_percentage):
     else:
         width_left_side = 142
         if battery_percentage == 255:
-            width_left_side = 100            
+            width_left_side = 100
         # draw white rounded rectangle for left and right side
         d.rounded_rectangle(
            [-10, img.height + 3, positions["wifi_text_position"][0] + width_left_side,
@@ -548,8 +548,7 @@ def serve_orig_image():
     global CURRENT_ORIG_IMAGE
     if CURRENT_ORIG_IMAGE:
         return send_file(BytesIO(CURRENT_ORIG_IMAGE.getvalue()), mimetype='image/bmp')
-    else:
-        return send_file(get_no_image(), mimetype='image/bmp')
+    return send_file(get_no_image(), mimetype='image/bmp')
 
 @app.route('/image/original1.bmp', methods=['GET'])
 def serve_orig_image1():
@@ -559,8 +558,7 @@ def serve_orig_image1():
     global CURRENT_ORIG_IMAGE
     if CURRENT_ORIG_IMAGE:
         return send_file(BytesIO(CURRENT_ORIG_IMAGE.getvalue()), mimetype='image/bmp')
-    else:
-        return send_file(get_no_image(), mimetype='image/bmp')
+    return send_file(get_no_image(), mimetype='image/bmp')
 
 @app.route('/test/adapted_image.bmp', methods=['GET'])
 def test_adapted_image():
@@ -651,8 +649,8 @@ def display():
     global CURRENT_SEND_IMAGE
     global CONFIG_IMAGE_PATH
 
-    with open(CONFIG_IMAGE_PATH, 'rb') as f:
-        CURRENT_ORIG_IMAGE = BytesIO(f.read())
+    with open(CONFIG_IMAGE_PATH, 'rb') as image_file:
+        CURRENT_ORIG_IMAGE = BytesIO(image_file.read())
 
     if CONFIG_IMAGE_MODIFICATION:
         CURRENT_SEND_IMAGE = get_and_modify_image()
@@ -720,12 +718,11 @@ def update_refresh_time():
 
         # Update the config.yaml file
         config['refresh_time'] = CONFIG_REFRESH_TIME
-        with open(config_file, 'w', encoding='utf-8') as f:
-            yaml.safe_dump(config, f)
+        with open(config_file, 'w', encoding='utf-8') as config_file_handle_refresh_time:
+            yaml.safe_dump(config, config_file_handle_refresh_time)
 
         return jsonify({"status": "success", "new_refresh_time": CONFIG_REFRESH_TIME}), 200
-    else:
-        return jsonify({"status": "error", "message": "Invalid refresh rate"}), 400
+    return jsonify({"status": "error", "message": "Invalid refresh rate"}), 400
 
 @app.route('/settings/image_modification', methods=['POST'])
 def update_image_modification():
@@ -747,12 +744,11 @@ def update_image_modification():
 
         # Update the config.yaml file
         config['image_modification'] = image_modification
-        with open(config_file, 'w', encoding='utf-8') as f:
-            yaml.safe_dump(config, f)
+        with open(config_file, 'w', encoding='utf-8') as config_f:
+            yaml.safe_dump(config, config_f)
 
         return jsonify({"status": "success", "image_modification": CONFIG_IMAGE_MODIFICATION}), 200
-    else:
-        return jsonify({"status": "error", "message": "Invalid image_modification"}), 400
+    return jsonify({"status": "error", "message": "Invalid image_modification"}), 400
 
 @app.route('/settings/imagepath', methods=['POST'])
 def update_image_path():
@@ -772,12 +768,11 @@ def update_image_path():
 
         # Update the config.yaml file
         config['image_path'] = CONFIG_IMAGE_PATH
-        with open(config_file, 'w', encoding='utf-8') as f:
-            yaml.safe_dump(config, f)
+        with open(config_file, 'w', encoding='utf-8') as config_file_image_path:
+            yaml.safe_dump(config, config_file_image_path)
 
         return jsonify({"status": "success", "new_image_path": CONFIG_IMAGE_PATH}), 200
-    else:
-        return jsonify({"status": "error", "message": "Invalid image path"}), 400
+    return jsonify({"status": "error", "message": "Invalid image path"}), 400
 
 
 @app.route('/server/log', methods=['GET'])
@@ -828,7 +823,7 @@ def battery_view():
                 'timestamp': entry['timestamp'],
                 'battery_voltage': entry['battery_voltage'],
                 'rssi': entry['rssi']
-            } for entry in client_data_db_read 
+            } for entry in client_data_db_read
             if from_timestamp <= entry['timestamp'] <= to_timestamp
             ]
     else:
@@ -891,7 +886,7 @@ def get_status():
             'current_image_url_adapted': current_image_url_adapted
         },
         'client_data_db': [
-            { 
+            {
                 'battery_voltage': entry['battery_voltage'],
                 'rssi': entry['rssi'],
                 'timestamp': entry['timestamp']
@@ -909,8 +904,8 @@ def main_page():
     This function reads the content of the 'index.html' file located in the 'web' directory
     and returns it as a rendered template string.
     """
-    with open('web/index.html', 'r', encoding='utf-8') as f:
-        return render_template_string(f.read())
+    with open('web/index.html', 'r', encoding='utf-8') as file:
+        return render_template_string(file.read())
 
 @app.route('/image/dummy.bmp', methods=['GET'])
 def dummy_image():
@@ -932,7 +927,7 @@ def handle_exit(signum, frame):
     persist_client_data()
     persist_client_log_data()
     print("Data persisted. Exiting...")
-    exit(0)
+    sys.exit(0)
 
 signal.signal(signal.SIGINT, handle_exit)
 signal.signal(signal.SIGTERM, handle_exit)
