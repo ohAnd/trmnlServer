@@ -1,38 +1,40 @@
-from flask import Flask, request, jsonify, render_template_string, send_file
+#! /usr/bin/env python
+# %%
 import datetime
 import ssl
 import os
 import time
-import psutil
 from datetime import timedelta
 from collections import deque
 import signal
-import yaml
 import socket
-from PIL import Image, ImageDraw, ImageFont
 from io import BytesIO
-
+import yaml
+import netifaces
+import psutil
+from flask import Flask, request, jsonify, render_template_string, send_file
+from PIL import Image, ImageDraw, ImageFont
 
 app = Flask(__name__)
 start_time = time.time()
 current_dir = os.path.dirname(os.path.abspath(__file__))
 
-battery_max_voltage = 4.1
-battery_min_voltage = 2.3
+BATTERY_MAX_VOLTAGE = 4.1
+BATTERY_MIN_VOLTAGE = 2.3
 
-#########################################################################################################
+###################################################################################################
 ## persistance
 # List to store logs
-logs = [] 
-log_persistence_interval = 20  # Number of entries before persisting to file
-log_show_last_lines = 20
+logs = []
+LOG_PERSISTANCE_INTERVAL = 20  # Number of entries before persisting to file
+LOG_SHOW_LAST_LINES = 20
 log_file = os.path.join(current_dir, 'logs/server.log')
 db_file = os.path.join(current_dir, 'db/clientData.txt')
 db_client_log_file = os.path.join(current_dir, 'db/clientLog.txt')
 
 last_client_data = {
     'refresh_rate': 900,
-    'battery_voltage': battery_max_voltage,
+    'battery_voltage': BATTERY_MAX_VOLTAGE,
     'rssi': -100,
     'last_contact': 0
 }
@@ -68,7 +70,7 @@ def add_log_entry(context, info):
         'info': info
     }
     logs.append(log_entry)
-    if len(logs) >= log_persistence_interval:
+    if len(logs) >= LOG_PERSISTANCE_INTERVAL:
         persist_log()
 
 def add_client_data_entry(battery_voltage, rssi):
@@ -89,7 +91,7 @@ def add_client_data_entry(battery_voltage, rssi):
             'timestamp': datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         }
         client_data_db.append(entry)
-    if len(client_data_db) >= log_persistence_interval:
+    if len(client_data_db) >= LOG_PERSISTANCE_INTERVAL:
         persist_client_data()
 
 def persist_client_data():
@@ -104,7 +106,7 @@ def persist_client_data():
 def add_client_log_entry(log_entry):
     # Append the new entry to the client_data_db
     client_log_db.append(log_entry)
-    if len(client_log_db) >= log_persistence_interval:
+    if len(client_log_db) >= LOG_PERSISTANCE_INTERVAL:
         persist_client_log_data()
 
 def persist_client_log_data():
@@ -150,8 +152,8 @@ if os.path.exists(config_file):
         config_image_path = config['image_path']
         config_image_modification = config['image_modification']
         config_refresh_time = config['refresh_time']
-        battery_max_voltage = config['battery_max_voltage']
-        battery_min_voltage = config['battery_min_voltage']
+        BATTERY_MAX_VOLTAGE = config['battery_max_voltage']
+        BATTERY_MIN_VOLTAGE = config['battery_min_voltage']
 else:
     config = {
         'image_path': 'images/screen.bmp',
@@ -191,18 +193,19 @@ def add_footer_to_image(src_image, wifi_percentage, battery_percentage):
     footer_height = 35
     # Resize the source image to make space for the footer
     img = img.crop((0, 0, img.width, img.height - footer_height))
-    
+
     # define appearance
     background = 1 # white - 1 black
     # Create a new image with extra space for the footer
-    new_img = Image.new('1', (img.width, img.height + footer_height), color=1 - background)  # '1' mode for 1-bit pixels, black and white
-    
+    # '1' mode for 1-bit pixels, black and white
+    new_img = Image.new('1', (img.width, img.height + footer_height), color=1 - background)
+
     # Paste the original image onto the new image
     new_img.paste(img, (0, 0))
-    
+
     # Initialize ImageDraw
     d = ImageDraw.Draw(new_img)
-    
+
     # Load fonts
     try:
         icon_font = ImageFont.truetype("web/fontawesome-webfont.ttf", 24)
@@ -211,7 +214,7 @@ def add_footer_to_image(src_image, wifi_percentage, battery_percentage):
     except IOError:
         icon_font = ImageFont.load_default()
         text_font = ImageFont.load_default()
-        
+
     # Define positions
     text_line_height = 7
     symbol_line_height = 4
@@ -220,7 +223,7 @@ def add_footer_to_image(src_image, wifi_percentage, battery_percentage):
     battery_icon_position = (104, img.height + symbol_line_height)
     battery_text_position = (140, img.height + text_line_height)
     date_time_position = (img.width - 155, img.height + text_line_height)
-    
+
     # draw line if backgorund = white
     if background == 0:
         d.line([(0, img.height + 1), (img.width, img.height + 1)], fill=0, width=2)
@@ -232,33 +235,33 @@ def add_footer_to_image(src_image, wifi_percentage, battery_percentage):
         d.rounded_rectangle([-10, img.height + 3, wifi_text_position[0] + width_left_side, img.height + footer_height + 5], fill=1, radius=5)
         d.rounded_rectangle([date_time_position[0] - 8, img.height + 3, 810, img.height + footer_height + 5], fill=1, radius=5)
         background = 0
-        
-    
+
+
     # Draw WiFi icon and percentage
     wifi_icon = "\uf1eb"
     d.text(wifi_icon_position, wifi_icon, fill=background, font=icon_font)  # fill=1 for white
     d.text(wifi_text_position, f"{round(wifi_percentage)} %", fill=background, font=text_font)  # fill=1 for white
-    
+
     # Draw battery icon and percentage
     battery_icon = getBatteryIcon(battery_percentage)
-    
+
     if battery_percentage == 255:
         d.text(battery_icon_position, "\uf244", fill=background, font=icon_font)  # fill=1 for white
         d.text((battery_icon_position[0] + 10 , battery_icon_position[1]), "\uf0e7", fill=background, font=icon_font)  # fill=1 for white
     else:
         d.text(battery_icon_position, battery_icon, fill=background, font=icon_font)  # fill=1 for white
         d.text(battery_text_position, f"{round(battery_percentage)} %", fill=background, font=text_font)  # fill=1 for white
-    
+
     # Draw date and time
     date_time = datetime.datetime.now().strftime("%d.%m.%Y %H:%M")
     d.text(date_time_position, date_time, fill=background, font=text_font)  # fill=1 for white
-    
+
     # Save the new image as BMP
     # Save the new image to a BytesIO object
     img_io = BytesIO()
     new_img.save(img_io, format="BMP")
     img_io.seek(0)
-    
+
     # Manually adjust the BMP header
     img_io.seek(54)
     # Example: Set the color palette to black and white
@@ -277,33 +280,33 @@ def get_and_modify_image():
 def get_no_image():
         # Create a blank image with white background
     img = Image.new('1', (800, 480), color=1)  # '1' mode for 1-bit pixels, black and white
-    
+
     # Initialize ImageDraw
     d = ImageDraw.Draw(img)
-    
+
     # Load font
     try:
         text_font = ImageFont.truetype("DejaVuSans.ttf", 24)
     except IOError:
         text_font = ImageFont.load_default()
-    
+
     # Define text position and content
-    text = "No image available" 
+    text = "No image available"
     date_time = datetime.datetime.now().strftime("%d.%m.%Y %H:%M:%S")
     text = f"{text}\n{date_time}"
     text_bbox = d.textbbox((0, 0), text, font=text_font)
     text_width, text_height = text_bbox[2] - text_bbox[0], text_bbox[3] - text_bbox[1]
     text_position = ((img.width - text_width) // 2, (img.height - text_height) // 2)
-    
+
     # Draw text on the image
     d.text(text_position, text, fill=0, font=text_font)  # fill=0 for black
-    
+
     # Save the image to a BytesIO object
     img_io = BytesIO()
     img.save(img_io, format="BMP")
     img_io.seek(0)
     return img_io
-#########################################################################################################
+###################################################################################################
 ## helper
 def get_ip_address():
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -316,6 +319,7 @@ def get_ip_address():
     finally:
         s.close()
     return ip
+
 # get the ip address of the server after startup of script
 server_ip = get_ip_address()
 print(f"Server is running on IP: {server_ip}")
@@ -324,7 +328,11 @@ print(f"Server is running on IP: {server_ip}")
 def getBatteryState(battery_voltage):
     if float(battery_voltage) > 4.6: # is chharging
         return 255
-    battery_state = round(((float(battery_voltage) - battery_min_voltage) / (battery_max_voltage - battery_min_voltage)) * 100, 1)
+    battery_state = round(
+        (
+            (float(battery_voltage) - BATTERY_MIN_VOLTAGE) /
+            (BATTERY_MAX_VOLTAGE - BATTERY_MIN_VOLTAGE)) * 100, 1
+        )
     if battery_state > 100:
         battery_state = 100
     elif battery_state < 0:
@@ -341,7 +349,7 @@ def getWifiSignalStrength(rssi):
         quality = 2 * (rssi + 100)
     return quality
 
-#########################################################################################################
+###################################################################################################
 ## web server
 ## specific BMP serving
 
@@ -349,30 +357,36 @@ def getWifiSignalStrength(rssi):
 def serve_image_screen():
     global current_send_image
     # Log the request with timestamp and context
-    add_log_entry('Request received at /image/screen.bmp', f'serving image for IP: {request.remote_addr}')
+    add_log_entry(
+        'Request received at /image/screen.bmp',
+        f'serving image for IP: {request.remote_addr}'
+    )
     return send_file(BytesIO(current_send_image.getvalue()), mimetype='image/bmp')
 
 @app.route('/image/screen1.bmp', methods=['GET'])
 def serve_image_screen1():
     global current_send_image
     # Log the request with timestamp and context
-    add_log_entry('Request received at /image/screen1.bmp', f'serving image for IP: {request.remote_addr}')
+    add_log_entry(
+        'Request received at /image/screen1.bmp',
+        f'serving image for IP: {request.remote_addr}'
+    )
     return send_file(BytesIO(current_send_image.getvalue()), mimetype='image/bmp')
 
 @app.route('/image/original.bmp', methods=['GET'])
 def serve_orig_image():
     global current_orig_image
     if current_orig_image:
-        return send_file(BytesIO(current_orig_image.getvalue()), mimetype='image/bmp') 
-    else:        
+        return send_file(BytesIO(current_orig_image.getvalue()), mimetype='image/bmp')
+    else:
         return send_file(get_no_image(), mimetype='image/bmp')
 
 @app.route('/image/original1.bmp', methods=['GET'])
 def serve_orig_image1():
     global current_orig_image
     if current_orig_image:
-        return send_file(BytesIO(current_orig_image.getvalue()), mimetype='image/bmp') 
-    else:        
+        return send_file(BytesIO(current_orig_image.getvalue()), mimetype='image/bmp')
+    else:
         return send_file(get_no_image(), mimetype='image/bmp')
 
 @app.route('/test/adapted_image.bmp', methods=['GET'])
@@ -381,7 +395,10 @@ def test_adapted_image():
     # Generate the adapted image
     current_send_image = get_and_modify_image()
     # Log the request with timestamp and context
-    add_log_entry('Request received at /test/adapted_image', f'serving adapted image for IP: {request.remote_addr}')
+    add_log_entry(
+        'Request received at /test/adapted_image',
+        f'serving adapted image for IP: {request.remote_addr}'
+    )
     return send_file(BytesIO(current_send_image.getvalue()), mimetype='image/bmp')
 
 ## api
@@ -396,7 +413,10 @@ def display():
     # print(headers)
 
     # Log the request with timestamp and context
-    add_log_entry('Request received at /api/display', f'Headers: {dict(headers)}, URL: {request.url}')
+    add_log_entry(
+        'Request received at /api/display',
+        f'Headers: {dict(headers)},URL: {request.url}'
+    )
 
     # Example of accessing specific headers
     id = headers.get('ID')
@@ -428,7 +448,7 @@ def display():
         current_image_url =  "https://" + get_ip_address() + ":83/image/original1.bmp"
         current_image_url_adapted = "https://" + get_ip_address() + ":83/image/screen1.bmp"
         bmp_send_switch = True
-    
+
     response = {
         "status": 0,
         "image_url": current_image_url_adapted,
@@ -442,15 +462,15 @@ def display():
     global current_orig_image
     global current_send_image
     global config_image_path
-    
+
     with open(config_image_path, 'rb') as f:
         current_orig_image = BytesIO(f.read())
-    
+
     if config_image_modification:
         current_send_image = get_and_modify_image()
     else:
         current_send_image = current_orig_image
-    
+
     add_log_entry('send json /api/display', f'response: {response}')
     return jsonify(response)
 
@@ -484,34 +504,34 @@ def get_settings():
 def update_refresh_time():
     data = request.json
     new_refresh_time = data.get('refresh_rate')
-    
+
     if new_refresh_time is not None:
         global config_refresh_time
         config_refresh_time = int(new_refresh_time)
-        
+
         # Update the config.yaml file
         config['refresh_time'] = config_refresh_time
         with open(config_file, 'w') as f:
             yaml.safe_dump(config, f)
-        
+
         return jsonify({"status": "success", "new_refresh_time": config_refresh_time}), 200
     else:
         return jsonify({"status": "error", "message": "Invalid refresh rate"}), 400
-    
+
 @app.route('/settings/image_modification', methods=['POST'])
 def update_image_modification():
     data = request.json
     image_modification = data.get('image_modification')
-    
+
     if image_modification is not None:
         global config_image_modification
         config_image_modification = image_modification
-        
+
         # Update the config.yaml file
         config['image_modification'] = image_modification
         with open(config_file, 'w') as f:
             yaml.safe_dump(config, f)
-        
+
         return jsonify({"status": "success", "image_modification": config_image_modification}), 200
     else:
         return jsonify({"status": "error", "message": "Invalid image_modification"}), 400
@@ -520,16 +540,16 @@ def update_image_modification():
 def update_image_path():
     data = request.json
     new_image_path = data.get('bmp_path')
-    
+
     if new_image_path is not None:
         global config_image_path
         config_image_path = new_image_path
-        
+
         # Update the config.yaml file
         config['image_path'] = config_image_path
         with open(config_file, 'w') as f:
             yaml.safe_dump(config, f)
-        
+
         return jsonify({"status": "success", "new_image_path": config_image_path}), 200
     else:
         return jsonify({"status": "error", "message": "Invalid image path"}), 400
@@ -538,7 +558,7 @@ def update_image_path():
 @app.route('/server/log', methods=['GET'])
 def log_view():
     # Get the last 30 lines from the log file
-    last_30_lines = get_last_n_lines_from_log(log_file, log_show_last_lines)
+    last_30_lines = get_last_n_lines_from_log(log_file, LOG_SHOW_LAST_LINES)
     # Format logs as plain text
     formatted_logs = "\n".join(last_30_lines)
     return formatted_logs, 200, {'Content-Type': 'text/plain'}
@@ -548,7 +568,7 @@ def battery_view():
     client_data_db_read = reading_client_data()
     # Format logs as plain text
     today = datetime.datetime.now().strftime('%Y-%m-%d')
-    if request.args.get('all') != None:
+    if request.args.get('all') is not None:
         response_data = [
             {
                 'timestamp': entry['timestamp'],
@@ -556,8 +576,8 @@ def battery_view():
                 'rssi': entry['rssi']
             } for entry in client_data_db_read
         ]
-    elif request.args.get('from') != None and request.args.get('to') != None:
-        
+    elif request.args.get('from') is not None and request.args.get('to') is not None:
+
         from_timestamp = request.args.get('from')
         to_timestamp = request.args.get('to')
         if from_timestamp and to_timestamp:
@@ -582,7 +602,7 @@ def battery_view():
 def get_status():
     uptime_seconds = time.time() - start_time
     uptime_timedelta = timedelta(seconds=uptime_seconds)
-    uptime_str = str(uptime_timedelta).split('.')[0]  # Remove microseconds
+    uptime_str = str(uptime_timedelta).split('.', maxsplit=1)[0]  # Remove microseconds
     cpu_load = psutil.cpu_percent(interval=1)
     current_time = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime())
     global last_client_data
@@ -590,10 +610,15 @@ def get_status():
     # client date are not available use last stored data from file
     if last_client_data['last_contact'] == 0:
         client_data_db_read = reading_client_data()
-        last_client_data['battery_voltage'] = client_data_db_read[-1]['battery_voltage']
-        last_client_data['rssi'] = client_data_db_read[-1]['rssi']
-        last_client_data['last_contact'] = client_data_db_read[-1]['timestamp']
-        
+        try:
+            last_client_data['battery_voltage'] = client_data_db_read[-1]['battery_voltage']
+            last_client_data['rssi'] = client_data_db_read[-1]['rssi']
+            last_client_data['last_contact'] = client_data_db_read[-1]['timestamp']
+        except Exception:
+            last_client_data['battery_voltage'] = 0
+            last_client_data['rssi'] = 0
+            last_client_data['last_contact'] = 1735686000
+
     global current_image_url
 
     return jsonify({
@@ -604,8 +629,8 @@ def get_status():
         },
         'client': {
             'battery_voltage': round(last_client_data['battery_voltage'], 2),
-            'battery_voltage_max': battery_max_voltage,
-            'battery_voltage_min': battery_min_voltage,
+            'battery_voltage_max': BATTERY_MAX_VOLTAGE,
+            'battery_voltage_min': BATTERY_MIN_VOLTAGE,
             'battery_state': getBatteryState(last_client_data['battery_voltage']),
             'wifi_signal': last_client_data['rssi'],
             'wifi_signal_strength': getWifiSignalStrength(last_client_data['rssi']),
@@ -615,7 +640,11 @@ def get_status():
             'current_image_url_adapted': current_image_url_adapted
         },
         'client_data_db': [
-            { 'battery_voltage': entry['battery_voltage'], 'rssi': entry['rssi'], 'timestamp': entry['timestamp'] } for entry in client_data_db
+            { 
+                'battery_voltage': entry['battery_voltage'],
+                'rssi': entry['rssi'],
+                'timestamp': entry['timestamp']
+            } for entry in client_data_db
         ]
     })
 
