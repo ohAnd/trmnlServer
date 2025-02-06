@@ -28,22 +28,47 @@ from collections import deque
 import signal
 import socket
 from io import BytesIO
-import yaml
 import psutil
 from flask import Flask, request, jsonify, render_template_string, send_file
 from PIL import Image, ImageDraw, ImageFont
 from werkzeug.serving import WSGIRequestHandler
+from config import ConfigManager
+
+
+###################################################################################################
+SERVER_PORT = 1184
+
+LOG_PERSISTANCE_INTERVAL = 20  # Number of entries before persisting to file
+LOG_SHOW_LAST_LINES = 20
+
+###################################################################################################
+###################################################################################################
+## helper
+def get_ip_address():
+    """
+    Get the local IP address of the machine.
+
+    This function creates a UDP socket and connects to a remote address to 
+    determine the local IP address. The remote address does not need to be 
+    reachable. If an error occurs, it defaults to '127.0.0.1'.
+    """
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        # doesn't even have to be reachable
+        s.connect(('10.254.254.254', 1))
+        ip = s.getsockname()[0]
+    except (IndexError, KeyError):
+        ip = '127.0.0.1'
+    finally:
+        s.close()
+    return ip
+
+# get the ip address of the server after startup of script
+server_ip = get_ip_address()
+print(f"Server is running on IP: {server_ip}")
 
 app = Flask(__name__)
 start_time = time.time()
-
-BATTERY_MAX_VOLTAGE = 4.1
-BATTERY_MIN_VOLTAGE = 2.3
-
-# Declare global variables for configuration
-CONFIG_IMAGE_PATH = None
-CONFIG_IMAGE_MODIFICATION = None
-CONFIG_REFRESH_TIME = None
 
 base_path = os.path.dirname(os.path.abspath(__file__))
 # get param to set a specific path for log, db, cert
@@ -68,19 +93,44 @@ if len(os.sys.argv) > 1:
 else:
     current_dir = base_path
 
-###################################################################################################
+config_manager = ConfigManager(current_dir)
+
 ## persistance
 # List to store logs
 logs = []
-LOG_PERSISTANCE_INTERVAL = 20  # Number of entries before persisting to file
-LOG_SHOW_LAST_LINES = 20
 log_file = os.path.join(current_dir, 'logs/server.log')
 db_file = os.path.join(current_dir, 'db/clientData.txt')
 db_client_log_file = os.path.join(current_dir, 'db/clientLog.txt')
 
+global_state = {
+    ## initialize last shown image
+    'image': {
+        'bmp_send_switch': True,
+        'current_image_url': (
+            'https://' + get_ip_address() + ':' + str(SERVER_PORT) + '/image/dummy.bmp'
+        ),
+        'current_image_url_adapted': (
+            'https://' + get_ip_address() + ':' + str(SERVER_PORT) + '/image/dummy.bmp'
+        ),
+        # In-memory object to store the last sent image as a blob
+        'current_orig_image': None,
+        'current_send_image': BytesIO()
+    },
+    'server': {
+        'uptime': 0,
+        'cpu_load': 0,
+        'current_time': 0
+    },
+    'client': {
+        'battery_voltage': 0,
+        'battery_voltage_max': 0
+    }
+}
+
+# start client data
 last_client_data = {
     'refresh_rate': 900,
-    'battery_voltage': BATTERY_MAX_VOLTAGE,
+    'battery_voltage': config_manager.config["battery_max_voltage"],
     'rssi': -100,
     'last_contact': 0
 }
@@ -98,9 +148,12 @@ def get_last_n_lines_from_log(file_path, n):
     """
     Retrieve the last n lines from the log file and combine them with formatted logs.
     """
-    with open(file_path, 'r', encoding='utf-8') as file:
-        lines = file.readlines()
-        file_logs = lines[-n:]
+    try:
+        with open(file_path, 'r', encoding='utf-8') as file:
+            lines = file.readlines()
+            file_logs = lines[-n:] if len(lines) >= n else lines
+    except FileNotFoundError:
+        file_logs = []
 
     formatted_logs = [
         f"{log['timestamp']} -- [{log['context']}] -- {log['info']}\n"
@@ -224,36 +277,6 @@ def reading_client_data():
     return client_data_db_read
 
 ###################################################################################################
-## configuration
-# get the config file at current_dir/config.yaml
-config_file = os.path.join(current_dir, 'config.yaml')
-if os.path.exists(config_file):
-    with open(config_file, 'r', encoding='utf-8') as f:
-        config = yaml.safe_load(f)
-        CONFIG_IMAGE_PATH = config['image_path']
-        CONFIG_IMAGE_MODIFICATION = config['image_modification']
-        CONFIG_REFRESH_TIME = config['refresh_time']
-        BATTERY_MAX_VOLTAGE = config['battery_max_voltage']
-        BATTERY_MIN_VOLTAGE = config['battery_min_voltage']
-else:
-    config = {
-        'image_path': 'images/screen.bmp',
-        'image_modification': True,        
-        'refresh_time': 900,
-        'battery_max_voltage': 4.1,
-        'battery_min_voltage': 2.3
-    }
-    with open(config_file, 'w', encoding='utf-8') as config_file_handle:
-        yaml.safe_dump(config, config_file_handle)
-    print("Config file not found. Created a new one with default values.")
-    print("Please restart the server after configuring the settings in config.yaml")
-    sys.exit(0)
-
-###################################################################################################
-## bmp modification
-# In-memory object to store the last sent image as a blob
-CURRENT_ORIG_IMAGE = None
-CURRENT_SEND_IMAGE = None
 
 def get_battery_icon(battery):
     """
@@ -276,7 +299,7 @@ def add_footer_to_image(src_image, wifi_percentage, battery_percentage):
     Adds a footer to an image with WiFi and battery percentages, and the current date and time.
     """
     # Load the source image
-    img = Image.open(src_image)
+    img = Image.open(BytesIO(src_image.getvalue()))
     footer_height = 35
     # Resize the source image to make space for the footer
     img = img.crop((0, 0, img.width, img.height - footer_height))
@@ -398,20 +421,15 @@ def add_footer_to_image(src_image, wifi_percentage, battery_percentage):
 
     return img_io
 
-def get_and_modify_image():
+def get_and_modify_image(image_blob):
     """
     Retrieves and modifies an image by adding a footer with WiFi signal strength and battery
     percentage.
-
-    This function uses global variables and other helper functions to get the WiFi signal strength
-    and battery state from the last client data, and then adds this information as a footer to the
-    image specified by the global  CONFIG_IMAGE_PATH.
     """
-    global CONFIG_IMAGE_PATH
     # Example usage
     wifi_percentage = get_wifi_signal_strength(last_client_data['rssi'])
     battery_percentage = get_battery_state(last_client_data['battery_voltage'])
-    return add_footer_to_image(CONFIG_IMAGE_PATH,wifi_percentage, battery_percentage)
+    return add_footer_to_image(image_blob,wifi_percentage, battery_percentage)
 
 def get_no_image():
     """
@@ -447,30 +465,6 @@ def get_no_image():
     img.save(img_io, format="BMP")
     img_io.seek(0)
     return img_io
-###################################################################################################
-## helper
-def get_ip_address():
-    """
-    Get the local IP address of the machine.
-
-    This function creates a UDP socket and connects to a remote address to 
-    determine the local IP address. The remote address does not need to be 
-    reachable. If an error occurs, it defaults to '127.0.0.1'.
-    """
-    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    try:
-        # doesn't even have to be reachable
-        s.connect(('10.254.254.254', 1))
-        ip = s.getsockname()[0]
-    except (IndexError, KeyError):
-        ip = '127.0.0.1'
-    finally:
-        s.close()
-    return ip
-
-# get the ip address of the server after startup of script
-server_ip = get_ip_address()
-print(f"Server is running on IP: {server_ip}")
 
 # calculate battery state
 def get_battery_state(battery_voltage):
@@ -481,8 +475,11 @@ def get_battery_state(battery_voltage):
         return 255
     battery_state = round(
         (
-            (float(battery_voltage) - BATTERY_MIN_VOLTAGE) /
-            (BATTERY_MAX_VOLTAGE - BATTERY_MIN_VOLTAGE)) * 100, 1
+            (float(battery_voltage) - config_manager.config["battery_min_voltage"]) /
+            (
+                config_manager.config["battery_max_voltage"] -
+                config_manager.config["battery_min_voltage"]
+            )) * 100, 1
         )
     if battery_state > 100:
         battery_state = 100
@@ -512,13 +509,14 @@ def serve_image_screen():
     """
     Serve the current image as a BMP file.
     """
-    global CURRENT_SEND_IMAGE
     # Log the request with timestamp and context
     add_log_entry(
         'Request received at /image/screen.bmp',
         f'serving image for IP: {request.remote_addr}'
     )
-    return send_file(BytesIO(CURRENT_SEND_IMAGE.getvalue()), mimetype='image/bmp')
+    return send_file(
+        BytesIO(global_state['image']['current_send_image'].getvalue()), mimetype='image/bmp'
+    )
 
 @app.route('/image/screen1.bmp', methods=['GET'])
 def serve_image_screen1():
@@ -526,28 +524,29 @@ def serve_image_screen1():
     Serve the current image for screen1.bmp.
 
     This function logs the request with a timestamp and context, then serves the 
-    current image stored in `CURRENT_SEND_IMAGE` as a BMP file.
+    current image stored in `global_state['image']['current_send_image']` as a BMP file.
     """
-    global CURRENT_SEND_IMAGE
     # Log the request with timestamp and context
     add_log_entry(
         'Request received at /image/screen1.bmp',
         f'serving image for IP: {request.remote_addr}'
     )
-    return send_file(BytesIO(CURRENT_SEND_IMAGE.getvalue()), mimetype='image/bmp')
+    return send_file(
+        BytesIO(global_state['image']['current_send_image'].getvalue()), mimetype='image/bmp'
+    )
 
 @app.route('/image/original.bmp', methods=['GET'])
 def serve_orig_image():
     """
-    Serve the original image if available, otherwise serve a placeholder image.
-
-    This function checks if the global variable `CURRENT_ORIG_IMAGE` is set. If it is,
-    the function returns the image as a BMP file. If `CURRENT_ORIG_IMAGE` is not set,
-    it returns a placeholder image as a BMP file.
+    This function checks if the global variable `global_state['image']['current_orig_image']` is
+    set. If it is, the function returns the image as a BMP file.
+    If `global_state['image']['current_orig_image']` is not set, it returns a placeholder image as
+    a BMP file.
     """
-    global CURRENT_ORIG_IMAGE
-    if CURRENT_ORIG_IMAGE:
-        return send_file(BytesIO(CURRENT_ORIG_IMAGE.getvalue()), mimetype='image/bmp')
+    if global_state['image']['current_orig_image']:
+        return send_file(
+            BytesIO(global_state['image']['current_orig_image'].getvalue()), mimetype='image/bmp'
+        )
     return send_file(get_no_image(), mimetype='image/bmp')
 
 @app.route('/image/original1.bmp', methods=['GET'])
@@ -555,9 +554,10 @@ def serve_orig_image1():
     """
     Serve the original image if available, otherwise serve a default 'no image' placeholder.
     """
-    global CURRENT_ORIG_IMAGE
-    if CURRENT_ORIG_IMAGE:
-        return send_file(BytesIO(CURRENT_ORIG_IMAGE.getvalue()), mimetype='image/bmp')
+    if global_state['image']['current_orig_image']:
+        return send_file(
+            BytesIO(global_state['image']['current_orig_image'].getvalue()), mimetype='image/bmp'
+        )
     return send_file(get_no_image(), mimetype='image/bmp')
 
 @app.route('/test/adapted_image.bmp', methods=['GET'])
@@ -570,22 +570,21 @@ def test_adapted_image():
     2. Logs the request with a timestamp and the client's IP address.
     3. Returns the adapted image as a BMP file.
     """
-    global CURRENT_SEND_IMAGE
     # Generate the adapted image
-    CURRENT_SEND_IMAGE = get_and_modify_image()
+    global_state['image']['current_send_image'] = get_and_modify_image(
+            BytesIO(global_state['image']['current_send_image'].read())
+        )
     # Log the request with timestamp and context
     add_log_entry(
         'Request received at /test/adapted_image',
         f'serving adapted image for IP: {request.remote_addr}'
     )
-    return send_file(BytesIO(CURRENT_SEND_IMAGE.getvalue()), mimetype='image/bmp')
+    return send_file(
+        BytesIO(global_state['image']['current_send_image'].getvalue()), mimetype='image/bmp'
+        )
 
 ## api
-## initialize last shown image
-current_image_url = 'https://' + get_ip_address() + ':83/image/dummy.bmp'
-current_image_url_adapted = 'https://' + get_ip_address() + ':83/image/dummy.bmp'
 
-BMP_SEND_SWITCH = True
 @app.route('/api/display', methods=['GET'])
 def display():
     """
@@ -623,39 +622,46 @@ def display():
 
     # Respond with a JSON containing status and url
     # Determine the image URL based on the current request count
-    global BMP_SEND_SWITCH
-    global current_image_url
-    global current_image_url_adapted
-    if BMP_SEND_SWITCH:
-        current_image_url = "https://" + get_ip_address() + ":83/image/original.bmp"
-        current_image_url_adapted = "https://" + get_ip_address() + ":83/image/screen.bmp"
-        BMP_SEND_SWITCH = False
+    if global_state['image']['bmp_send_switch']:
+        global_state['image']['current_image_url'] = (
+            "https://" + get_ip_address() + ':' + str(SERVER_PORT) + '/image/original.bmp'
+        )
+        global_state['image']['current_image_url_adapted'] = (
+            "https://" + get_ip_address() + ':' + str(SERVER_PORT) + '/image/screen.bmp'
+        )
+        global_state['image']['bmp_send_switch'] = False
     else:
-        current_image_url =  "https://" + get_ip_address() + ":83/image/original1.bmp"
-        current_image_url_adapted = "https://" + get_ip_address() + ":83/image/screen1.bmp"
-        BMP_SEND_SWITCH = True
+        global_state['image']['current_image_url'] =  (
+            "https://" + get_ip_address() + ':' + str(SERVER_PORT) + '/image/original1.bmp'
+        )
+        global_state['image']['current_image_url_adapted'] = (
+            "https://" + get_ip_address() + ':' + str(SERVER_PORT) + '/image/screen1.bmp'
+        )
+        global_state['image']['bmp_send_switch'] = True
 
     response = {
         "status": 0,
-        "image_url": current_image_url_adapted,
+        "image_url": global_state['image']['current_image_url_adapted'],
         "update_firmware": False,
-        "firmware_url": "https://" + server_ip + ":83/fw/update",
-        "refresh_rate": CONFIG_REFRESH_TIME,
+        "firmware_url": "https://" + server_ip + ":" + str(SERVER_PORT) + "/fw/update",
+        "refresh_rate": config_manager.config["refresh_time"],
         "reset_firmware": False,
         "special_function": ""
     }
     # generate the footer image as a in memory image as time of requested at client if configured
-    global CURRENT_ORIG_IMAGE
-    global CURRENT_SEND_IMAGE
-    global CONFIG_IMAGE_PATH
+    try:
+        with open(config_manager.config["image_path"], 'rb') as image_file:
+            global_state['image']['current_orig_image'] = BytesIO(image_file.read())
+    except FileNotFoundError:
+        with open('web/dummy.bmp', 'rb') as image_file:
+            global_state['image']['current_orig_image'] = BytesIO(image_file.read())
 
-    with open(CONFIG_IMAGE_PATH, 'rb') as image_file:
-        CURRENT_ORIG_IMAGE = BytesIO(image_file.read())
-
-    if CONFIG_IMAGE_MODIFICATION:
-        CURRENT_SEND_IMAGE = get_and_modify_image()
+    if config_manager.config["image_modification"]:
+        global_state['image']['current_send_image'] = get_and_modify_image(
+                global_state['image']['current_orig_image']
+            )
     else:
-        CURRENT_SEND_IMAGE = CURRENT_ORIG_IMAGE
+        global_state['image']['current_send_image'] = global_state['image']['current_orig_image']
 
     add_log_entry('send json /api/display', f'response: {response}')
     return jsonify(response)
@@ -691,13 +697,10 @@ def get_settings():
     image manipulation settings.
     """
     # get the current path to BMP file
-    global CONFIG_IMAGE_PATH
-    # get the current refresh rate
-    global last_client_data
     return jsonify({
-        'CONFIG_IMAGE_PATH': CONFIG_IMAGE_PATH,
-        'CONFIG_REFRESH_TIME': CONFIG_REFRESH_TIME,
-        'config_manipulate_image': CONFIG_IMAGE_MODIFICATION
+        'config_image_path': config_manager.config["image_path"],
+        'config_refresh_time': config_manager.config["refresh_time"],
+        'config_manipulate_image': config_manager.config["image_modification"]
     })
 
 @app.route('/settings/refreshtime', methods=['POST'])
@@ -706,22 +709,17 @@ def update_refresh_time():
     Update the refresh time in the configuration.
 
     This function reads the new refresh time from the JSON payload of the request,
-    updates the global configuration variable `CONFIG_REFRESH_TIME`, and writes
+    updates the global configuration variable `config_manager.config["refresh_time"]`, and writes
     the updated configuration back to the `config.yaml` file.
     """
     data = request.json
     new_refresh_time = data.get('refresh_rate')
 
     if new_refresh_time is not None:
-        global CONFIG_REFRESH_TIME
-        CONFIG_REFRESH_TIME = int(new_refresh_time)
-
-        # Update the config.yaml file
-        config['refresh_time'] = CONFIG_REFRESH_TIME
-        with open(config_file, 'w', encoding='utf-8') as config_file_handle_refresh_time:
-            yaml.safe_dump(config, config_file_handle_refresh_time)
-
-        return jsonify({"status": "success", "new_refresh_time": CONFIG_REFRESH_TIME}), 200
+        config_manager.set_refresh_time(new_refresh_time)
+        return jsonify(
+            {"status": "success", "new_image_path": config_manager.config["refresh_time"]}
+        ), 200
     return jsonify({"status": "error", "message": "Invalid refresh rate"}), 400
 
 @app.route('/settings/image_modification', methods=['POST'])
@@ -739,40 +737,31 @@ def update_image_modification():
     image_modification = data.get('image_modification')
 
     if image_modification is not None:
-        global CONFIG_IMAGE_MODIFICATION
-        CONFIG_IMAGE_MODIFICATION = image_modification
-
-        # Update the config.yaml file
-        config['image_modification'] = image_modification
-        with open(config_file, 'w', encoding='utf-8') as config_f:
-            yaml.safe_dump(config, config_f)
-
-        return jsonify({"status": "success", "image_modification": CONFIG_IMAGE_MODIFICATION}), 200
-    return jsonify({"status": "error", "message": "Invalid image_modification"}), 400
+        config_manager.set_image_modification(image_modification)
+        return jsonify(
+            {"status": "success", "new_image_path": config_manager.config["image_modification"]}
+        ), 200
+    return jsonify({"status": "error", "message": "Invalid new_image_path"}), 400
 
 @app.route('/settings/imagepath', methods=['POST'])
 def update_image_path():
     """
-    Updates the image path in the configuration file based on the JSON payload from the request.
+    is not None, it updates the image path in the configuration manager and returns a success
+    response. If the key is missing or the value is None, it returns an error response.
 
-    The function expects a JSON payload with a key 'bmp_path'. If the key is present and the value
-    is not None, it updates the global `CONFIG_IMAGE_PATH` variable and the `image_path` entry in
-    the `config.yaml` file.
+    Returns:
+        Response: A JSON response with a status message and the new image path if successful,
+        or an error message if not.
     """
     data = request.json
     new_image_path = data.get('bmp_path')
 
     if new_image_path is not None:
-        global CONFIG_IMAGE_PATH
-        CONFIG_IMAGE_PATH = new_image_path
-
-        # Update the config.yaml file
-        config['image_path'] = CONFIG_IMAGE_PATH
-        with open(config_file, 'w', encoding='utf-8') as config_file_image_path:
-            yaml.safe_dump(config, config_file_image_path)
-
-        return jsonify({"status": "success", "new_image_path": CONFIG_IMAGE_PATH}), 200
-    return jsonify({"status": "error", "message": "Invalid image path"}), 400
+        config_manager.set_image_path(new_image_path)
+        return jsonify(
+            {"status": "success", "new_image_path": config_manager.config["image_path"]}
+        ), 200
+    return jsonify({"status": "error", "message": "Invalid new_image_path"}), 400
 
 
 @app.route('/server/log', methods=['GET'])
@@ -851,8 +840,7 @@ def get_status():
     uptime_str = str(uptime_timedelta).split('.', maxsplit=1)[0]  # Remove microseconds
     cpu_load = psutil.cpu_percent(interval=1)
     current_time = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime())
-    global last_client_data
-    global client_data_db
+    # global client_data_db
     # client date are not available use last stored data from file
     if last_client_data['last_contact'] == 0:
         client_data_db_read = reading_client_data()
@@ -865,8 +853,6 @@ def get_status():
             last_client_data['rssi'] = 0
             last_client_data['last_contact'] = 1735686000
 
-    global current_image_url
-
     return jsonify({
         'server': {
             'uptime': uptime_str,
@@ -875,15 +861,15 @@ def get_status():
         },
         'client': {
             'battery_voltage': round(last_client_data['battery_voltage'], 2),
-            'battery_voltage_max': BATTERY_MAX_VOLTAGE,
-            'battery_voltage_min': BATTERY_MIN_VOLTAGE,
+            'battery_voltage_max': config_manager.config["battery_max_voltage"],
+            'battery_voltage_min': config_manager.config["battery_min_voltage"],
             'battery_state': get_battery_state(last_client_data['battery_voltage']),
             'wifi_signal': last_client_data['rssi'],
             'wifi_signal_strength': get_wifi_signal_strength(last_client_data['rssi']),
             'refresh_time': last_client_data['refresh_rate'],
             'last_contact': last_client_data['last_contact'],
-            'current_image_url': current_image_url,
-            'current_image_url_adapted': current_image_url_adapted
+            'current_image_url': global_state['image']['current_image_url'],
+            'current_image_url_adapted': global_state['image']['current_image_url_adapted']
         },
         'client_data_db': [
             {
@@ -922,6 +908,11 @@ def handle_exit(signum, frame):
     This function is triggered when a termination signal is received. It ensures
     that logs and client data are persisted before the program exits.
     """
+    print(
+        "\nKill signal received with signum: '" +
+        str(signum) + "' and frame: '" +
+        str(frame) + "' !"
+    )
     print("Signal received, persisting logs and client data...")
     persist_log()
     persist_client_data()
@@ -952,8 +943,9 @@ class SSLRequestHandler(WSGIRequestHandler):
                 raise
 
 if __name__ == '__main__':
+    # Start the server
     WSGIRequestHandler = SSLRequestHandler
-    BMP_SEND_SWITCH = True
+    global_state['image']['bmp_send_switch'] = True
     # Generate a self-signed certificate and key
     cert_file = os.path.join(current_dir, 'ssl/cert.pem')
     key_file = os.path.join(current_dir, 'ssl/key.pem')
@@ -964,8 +956,8 @@ if __name__ == '__main__':
             f'-days 1 -nodes -subj "/CN=localhost"'
         )
 
-    # Run HTTPS server on port 83
+    # Run HTTPS server on port SERVER_PORT
     context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     context.load_cert_chain(certfile=cert_file, keyfile=key_file)
-    app.run(host='0.0.0.0', port=1184, ssl_context=context)
+    app.run(host='0.0.0.0', port=SERVER_PORT, ssl_context=context)
 # %%
