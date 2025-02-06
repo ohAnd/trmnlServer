@@ -13,7 +13,6 @@ import os
 import sys
 import yaml
 
-
 class ConfigManager:
     '''
     Manages the configuration settings for the application.

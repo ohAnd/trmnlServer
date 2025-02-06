@@ -934,6 +934,16 @@ class SSLRequestHandler(WSGIRequestHandler):
             If any other SSL error occurs, it re-raises the exception.
     """
     def handle(self):
+        """
+        Handle the incoming request.
+
+        This method attempts to handle the request using the parent class's handle method.
+        If an SSL error occurs and the reason is 'PROTOCOL_IS_SHUTDOWN', it will be ignored.
+        Any other SSL errors will be raised.
+
+        Raises:
+            ssl.SSLError: If an SSL error occurs with a reason other than 'PROTOCOL_IS_SHUTDOWN'.
+        """
         try:
             super().handle()
         except ssl.SSLError as e:
