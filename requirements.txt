@@ -2,3 +2,4 @@ pillow>=10.3.0
 Flask>=2.2.5
 psutil==5.9.4
 PyYAML==6.0
+requests>=2.22.3

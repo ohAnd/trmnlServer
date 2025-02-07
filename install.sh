@@ -3,7 +3,7 @@
 # Variables
 SERVICE_NAME="trmnlServer"
 SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
-PYTHON_SCRIPT_PATH="$(dirname "$(realpath "$0")")/trmnlServer.py"
+PYTHON_SCRIPT_PATH="$(dirname "$(realpath "$0")")/trmnl_server.py"
 WORKING_DIRECTORY="$(dirname "$(realpath "$0")")"
 # USER="openhabian"
 # GROUP="openhab"
@@ -38,8 +38,8 @@ After=network.target
 [Service]
 ExecStart=/usr/bin/python3 ${PYTHON_SCRIPT_PATH}
 WorkingDirectory=${WORKING_DIRECTORY}
-StandardOutput=file:/var/log/trmnlServer.log
-StandardError=file:/var/log/trmnlServer_error.log
+StandardOutput=file:/var/log/trmnl_server.log
+StandardError=file:/var/log/trmnl_server_error.log
 Restart=always
 # User=${USER}
 # Group=${GROUP}
