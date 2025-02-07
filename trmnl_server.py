@@ -3,19 +3,6 @@
 This module implements a terminal server using Flask to serve images and handle API requests.
 It includes functionalities for logging, persisting client data, modifying images, and serving
 web pages. The server supports SSL for secure communication.
-Modules:
-    datetime: Provides classes for manipulating dates and times.
-    ssl: Provides access to Transport Layer Security (previously known as Secure Sockets Layer).
-    os: Provides a way of using operating system dependent functionality.
-    time: Provides various time-related functions.
-    yaml: YAML parser and emitter for Python.
-    psutil: Provides an interface for retrieving info on running processes and system utilization.
-    flask: A micro web framework written in Python.
-    PIL: Python Imaging Library, adds image processing capabilities.
-    signal: Provides mechanisms to use signal handlers in Python.
-    socket: Provides access to the BSD socket interface.
-    io: Provides the Python interfaces to stream handling.
-    collections: Implements specialized container datatypes.
 """
 # %%
 import datetime
@@ -28,6 +15,7 @@ from collections import deque
 import signal
 import socket
 from io import BytesIO
+import requests
 import psutil
 from flask import Flask, request, jsonify, render_template_string, send_file
 from PIL import Image, ImageDraw, ImageFont
@@ -322,11 +310,19 @@ def add_footer_to_image(src_image, wifi_percentage, battery_percentage):
             "icon_font": ImageFont.truetype("web/fontawesome-webfont.ttf", 24),
             "text_font": ImageFont.truetype("DejaVuSans-Bold.ttf", 14)
         }
-    except IOError:
+        add_log_entry(
+            'image modification',
+            'loading needed fonts'
+        )
+    except IOError as e:
         fonts = {
             "icon_font": ImageFont.load_default(),
             "text_font": ImageFont.load_default()
         }
+        add_log_entry(
+            'image modification',
+            f'loading default fonts - ERROR: {str(e)}'
+        )
 
     # Define positions
     positions = {
@@ -348,7 +344,7 @@ def add_footer_to_image(src_image, wifi_percentage, battery_percentage):
             width_left_side = 100
         # draw white rounded rectangle for left and right side
         d.rounded_rectangle(
-           [-10, img.height + 3, positions["wifi_text_position"][0] + width_left_side,
+            [-10, img.height + 3, positions["wifi_text_position"][0] + width_left_side,
             img.height + footer_height + 5],
             fill=1,
             radius=5
@@ -364,10 +360,10 @@ def add_footer_to_image(src_image, wifi_percentage, battery_percentage):
     # Draw WiFi icon and percentage
     wifi_icon = "\uf1eb"
     d.text(positions["wifi_icon_position"],
-           wifi_icon, fill=background, font=fonts["icon_font"]
+            wifi_icon, fill=background, font=fonts["icon_font"]
     )  # fill=1 for white
     d.text(positions["wifi_text_position"],
-           f"{round(wifi_percentage)} %", fill=background, font=fonts["text_font"]
+            f"{round(wifi_percentage)} %", fill=background, font=fonts["text_font"]
     )  # fill=1 for white
 
     # Draw battery icon and percentage
@@ -382,7 +378,7 @@ def add_footer_to_image(src_image, wifi_percentage, battery_percentage):
         )  # fill=1 for white
         d.text(
             (positions["battery_icon_position"][0] + 10,
-             positions["battery_icon_position"][1]),
+            positions["battery_icon_position"][1]),
             "\uf0e7", fill=background,
             font=fonts["icon_font"]
         )  # fill=1 for white
@@ -499,6 +495,23 @@ def get_wifi_signal_strength(rssi):
     else:
         quality = 2 * (rssi + 100)
     return quality
+
+def load_image(image_path):
+    """
+    Load an image from a local file path or a URL.
+
+    Args:
+        image_path (str): The path or URL of the image to load.
+
+    Returns:
+        BytesIO: The image data as a BytesIO object.
+    """
+    if image_path.startswith('http://') or image_path.startswith('https://'):
+        response = requests.get(image_path, timeout=10)
+        response.raise_for_status()  # Raise an exception for HTTP errors
+        return BytesIO(response.content)
+    with open(image_path, 'rb') as image_file:
+        return BytesIO(image_file.read())
 
 ###################################################################################################
 ## web server
@@ -650,8 +663,9 @@ def display():
     }
     # generate the footer image as a in memory image as time of requested at client if configured
     try:
-        with open(config_manager.config["image_path"], 'rb') as image_file:
-            global_state['image']['current_orig_image'] = BytesIO(image_file.read())
+        global_state['image']['current_orig_image'] = load_image(
+            config_manager.config["image_path"]
+        )
     except FileNotFoundError:
         with open('web/dummy.bmp', 'rb') as image_file:
             global_state['image']['current_orig_image'] = BytesIO(image_file.read())
