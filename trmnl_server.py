@@ -21,8 +21,9 @@ import psutil
 from flask import Flask, request, jsonify, render_template_string, send_file
 from PIL import Image, ImageDraw, ImageFont
 from werkzeug.serving import WSGIRequestHandler
+from gevent.pywsgi import WSGIServer
+from gevent.ssl import SSLContext
 from config import ConfigManager
-
 
 ###################################################################################################
 SERVER_PORT = 83
@@ -64,9 +65,10 @@ def get_ip_address():
 
 # get the ip address of the server after startup of script
 server_ip = get_ip_address()
-print(f"Server is running on IP: {server_ip}")
+print(f"Server will be running on IP: {server_ip} and port: {SERVER_PORT}")
 
 app = Flask(__name__)
+
 start_time = time.time()
 
 base_path = os.path.dirname(os.path.abspath(__file__))
@@ -509,6 +511,7 @@ def serve_image_screen():
         'Request received at /image/screen.bmp',
         f'serving image for IP: {request.remote_addr}'
     )
+    logger.info("[API] /image/screen.bmp - serving image for IP: %s", request.remote_addr)
     return send_file(
         BytesIO(global_state['image']['current_send_image'].getvalue()), mimetype='image/bmp'
     )
@@ -526,6 +529,7 @@ def serve_image_screen1():
         'Request received at /image/screen1.bmp',
         f'serving image for IP: {request.remote_addr}'
     )
+    logger.info("[API] /image/screen1.bmp - serving image for IP: %s", request.remote_addr)
     return send_file(
         BytesIO(global_state['image']['current_send_image'].getvalue()), mimetype='image/bmp'
     )
@@ -597,6 +601,7 @@ def display():
         'Request received at /api/display',
         f'Headers: {dict(headers)},URL: {request.url}'
     )
+    logger.info("[API] /api/display - URL: %s", request.url)
 
     # Example of accessing specific headers
     # client_id = headers.get('ID')
@@ -680,7 +685,6 @@ def api_log():
 
     # Log the request with timestamp and context
     add_log_entry('Request received at /api/log', f'Content: {content}')
-
     return jsonify({"status": "logged"}), 200
 
 @app.route('/settings', methods=['GET'])
@@ -948,9 +952,26 @@ class SSLRequestHandler(WSGIRequestHandler):
             else:
                 raise
 
+# if __name__ == '__main__':
+#     # Start the server
+#     WSGIRequestHandler = SSLRequestHandler
+#     global_state['image']['bmp_send_switch'] = True
+#     # Generate a self-signed certificate and key
+#     cert_file = os.path.join(current_dir, 'ssl/cert.pem')
+#     key_file = os.path.join(current_dir, 'ssl/key.pem')
+
+#     if not os.path.exists(cert_file) or not key_file:
+#         os.system(
+#             f'openssl req -x509 -newkey rsa:4096 -keyout {key_file} -out {cert_file} '
+#             f'-days 1 -nodes -subj "/CN=localhost"'
+#         )
+
+#     # Run HTTPS server on port SERVER_PORT
+#     context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+#     context.load_cert_chain(certfile=cert_file, keyfile=key_file)
+#     app.run(host='0.0.0.0', port=SERVER_PORT, ssl_context=context, debug=False)
+
 if __name__ == '__main__':
-    # Start the server
-    WSGIRequestHandler = SSLRequestHandler
     global_state['image']['bmp_send_switch'] = True
     # Generate a self-signed certificate and key
     cert_file = os.path.join(current_dir, 'ssl/cert.pem')
@@ -959,11 +980,16 @@ if __name__ == '__main__':
     if not os.path.exists(cert_file) or not key_file:
         os.system(
             f'openssl req -x509 -newkey rsa:4096 -keyout {key_file} -out {cert_file} '
-            f'-days 1 -nodes -subj "/CN=localhost"'
+            f'-days 365 -nodes'
+            f'-subj "/C=US/ST=Georgia/L=Atlanta/O=trmnlServer/OU=webapp/CN={server_ip}"'
         )
 
     # Run HTTPS server on port SERVER_PORT
-    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    context = SSLContext(ssl.PROTOCOL_TLS_SERVER)
     context.load_cert_chain(certfile=cert_file, keyfile=key_file)
-    app.run(host='0.0.0.0', port=SERVER_PORT, ssl_context=context)
+    logger.debug("Starting the server with gevent and SSL")
+    http_server = WSGIServer(
+        ('0.0.0.0', SERVER_PORT),app, ssl_context=context, log=None, error_log=logger
+    )
+    http_server.serve_forever()
 # %%
