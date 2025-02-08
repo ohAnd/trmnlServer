@@ -10,6 +10,7 @@ import ssl
 import os
 import sys
 import time
+import logging
 from datetime import timedelta
 from collections import deque
 import signal
@@ -24,13 +25,23 @@ from config import ConfigManager
 
 
 ###################################################################################################
-SERVER_PORT = 1184
+SERVER_PORT = 83
 
 LOG_PERSISTANCE_INTERVAL = 20  # Number of entries before persisting to file
 LOG_SHOW_LAST_LINES = 20
 
 ###################################################################################################
 ###################################################################################################
+LOGLEVEL = logging.DEBUG
+logger = logging.getLogger(__name__)
+formatter = logging.Formatter("%(asctime)s %(levelname)s %(message)s",
+                              "%Y-%m-%d %H:%M:%S")
+streamhandler = logging.StreamHandler(sys.stdout)
+streamhandler.setFormatter(formatter)
+logger.addHandler(streamhandler)
+logger.setLevel(LOGLEVEL)
+logger.info('[Main] Starting trmnlServer')
+
 ## helper
 def get_ip_address():
     """
@@ -292,10 +303,9 @@ def add_footer_to_image(src_image, wifi_percentage, battery_percentage):
     # Resize the source image to make space for the footer
     img = img.crop((0, 0, img.width, img.height - footer_height))
 
-    # define appearance
-    background = 1 # white - 1 black
+    # Define appearance
+    background = 1  # white - 1 black
     # Create a new image with extra space for the footer
-    # '1' mode for 1-bit pixels, black and white
     new_img = Image.new('1', (img.width, img.height + footer_height), color=1 - background)
 
     # Paste the original image onto the new image
@@ -310,19 +320,13 @@ def add_footer_to_image(src_image, wifi_percentage, battery_percentage):
             "icon_font": ImageFont.truetype("web/fontawesome-webfont.ttf", 24),
             "text_font": ImageFont.truetype("DejaVuSans-Bold.ttf", 14)
         }
-        add_log_entry(
-            'image modification',
-            'loading needed fonts'
-        )
+        logger.debug("[image modification] loading needed fonts")
     except IOError as e:
         fonts = {
             "icon_font": ImageFont.load_default(),
             "text_font": ImageFont.load_default()
         }
-        add_log_entry(
-            'image modification',
-            f'loading default fonts - ERROR: {str(e)}'
-        )
+        logger.error("[image modification] loading default fonts - ERROR: %s", str(e))
 
     # Define positions
     positions = {
@@ -335,75 +339,54 @@ def add_footer_to_image(src_image, wifi_percentage, battery_percentage):
         "date_time_position": (img.width - 155, img.height + 7)
     }
 
-    # draw line if backgorund = white
+    # Draw line if background is white
     if background == 0:
         d.line([(0, img.height + 1), (img.width, img.height + 1)], fill=0, width=2)
     else:
-        width_left_side = 142
-        if battery_percentage == 255:
-            width_left_side = 100
-        # draw white rounded rectangle for left and right side
+        width_left_side = 142 if battery_percentage != 255 else 100
+        # Draw white rounded rectangles for left and right sides
         d.rounded_rectangle(
             [-10, img.height + 3, positions["wifi_text_position"][0] + width_left_side,
-            img.height + footer_height + 5],
-            fill=1,
-            radius=5
+             img.height + footer_height + 5],
+            fill=1, radius=5
         )
         d.rounded_rectangle(
-            [positions["date_time_position"][0] - 8,
-            img.height + 3, 810, img.height + footer_height + 5],
-            fill=1,
-            radius=5
+            [positions["date_time_position"][0] - 8, img.height + 3, 810,
+             img.height + footer_height + 5],
+            fill=1, radius=5
         )
         background = 0
 
     # Draw WiFi icon and percentage
     wifi_icon = "\uf1eb"
-    d.text(positions["wifi_icon_position"],
-            wifi_icon, fill=background, font=fonts["icon_font"]
-    )  # fill=1 for white
-    d.text(positions["wifi_text_position"],
-            f"{round(wifi_percentage)} %", fill=background, font=fonts["text_font"]
-    )  # fill=1 for white
+    d.text(positions["wifi_icon_position"], wifi_icon, fill=background, font=fonts["icon_font"])
+    d.text(positions["wifi_text_position"], f"{round(wifi_percentage)} %", fill=background,
+           font=fonts["text_font"])
 
     # Draw battery icon and percentage
     battery_icon = get_battery_icon(battery_percentage)
-
     if battery_percentage == 255:
         d.text(
-            positions["battery_icon_position"],
-            "\uf244",
-            fill=background,
-            font=fonts["icon_font"]
-        )  # fill=1 for white
+            positions["battery_icon_position"], "\uf244", fill=background, font=fonts["icon_font"]
+        )
         d.text(
-            (positions["battery_icon_position"][0] + 10,
-            positions["battery_icon_position"][1]),
-            "\uf0e7", fill=background,
-            font=fonts["icon_font"]
-        )  # fill=1 for white
+            (positions["battery_icon_position"][0] + 10, positions["battery_icon_position"][1]),
+               "\uf0e7", fill=background, font=fonts["icon_font"]
+        )
     else:
         d.text(
             positions["battery_icon_position"],
-            battery_icon,
-            fill=background,
-            font=fonts["icon_font"]
-        )  # fill=1 for white
+            battery_icon, fill=background, font=fonts["icon_font"]
+        )
         d.text(
-            positions["battery_text_position"],
-            f"{round(battery_percentage)} %",
-            fill=background,
-            font=fonts["text_font"]
-        )  # fill=1 for white
+            positions["battery_text_position"], f"{round(battery_percentage)} %", fill=background,
+               font=fonts["text_font"]
+        )
 
     # Draw date and time
     date_time = datetime.datetime.now().strftime("%d.%m.%Y %H:%M")
-    d.text(
-        positions["date_time_position"],
-        date_time, fill=background, font=fonts["text_font"]
-    )  # fill=1 for white
+    d.text(positions["date_time_position"], date_time, fill=background, font=fonts["text_font"])
 
-    # Save the new image as BMP
     # Save the new image to a BytesIO object
     img_io = BytesIO()
     new_img.save(img_io, format="BMP")
@@ -411,7 +394,6 @@ def add_footer_to_image(src_image, wifi_percentage, battery_percentage):
 
     # Manually adjust the BMP header
     img_io.seek(54)
-    # Example: Set the color palette to black and white
     img_io.write(bytes([0, 0, 0, 0, 255, 255, 255, 0]))
     img_io.seek(0)
 

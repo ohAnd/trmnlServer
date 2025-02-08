@@ -11,7 +11,11 @@ Usage example:
 '''
 import os
 import sys
+import logging
 import yaml
+
+logger = logging.getLogger('__main__')
+logger.info('[Config] loading module ')
 
 class ConfigManager:
     '''
@@ -54,6 +58,7 @@ class ConfigManager:
         """
         Writes the configuration to 'config.yaml' file located in the current directory.
         """
+        logger.info('[Config] writing config file')
         with open(self.config_file, 'w', encoding='utf-8') as config_file_handle:
             yaml.safe_dump(self.config, config_file_handle)
 
@@ -61,6 +66,7 @@ class ConfigManager:
         """
         Updates the configuration file with the new refresh time.
         """
+        logger.info('[Config] setting refresh time to %s', refresh_time)
         self.config['refresh_time'] = refresh_time
         self.write_config()
 
@@ -68,6 +74,7 @@ class ConfigManager:
         """
         Updates the configuration file with the new image path.
         """
+        logger.info('[Config] setting image path to %s', image_path)
         self.config['image_path'] = image_path
         self.write_config()
 
@@ -75,6 +82,7 @@ class ConfigManager:
         """
         Updates the configuration file with the new image modification setting.
         """
+        logger.info('[Config] setting image modification to %s', image_modification)
         self.config['image_modification'] = image_modification
         self.write_config()
 
@@ -82,6 +90,7 @@ class ConfigManager:
         """
         Updates the configuration file with the new battery max voltage.
         """
+        logger.info('[Config] setting battery max voltage to %s', battery_max_voltage)
         self.config['battery_max_voltage'] = battery_max_voltage
         self.write_config()
 
@@ -89,5 +98,6 @@ class ConfigManager:
         """
         Updates the configuration file with the new battery min voltage.
         """
+        logger.info('[Config] setting battery min voltage to %s', battery_min_voltage)
         self.config['battery_min_voltage'] = battery_min_voltage
         self.write_config()
