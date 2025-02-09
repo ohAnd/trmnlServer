@@ -20,8 +20,9 @@ jobs:
         pip install pylint
     - name: Analysing the code with pylint
       run: |
-        # pylint $(git ls-files '*.py')
-        SCORE=$(pylint $(git ls-files '*.py') --output-format=parseable | tee pylint.log | awk -F ' ' '/Your code has been rated at/ {print $7}' | cut -d'/' -f1)
+        pylint_output=$(pylint $(git ls-files '*.py') --output-format=parseable | tee pylint.log)
+        echo "$pylint_output"
+        SCORE=$(echo "$pylint_output" | awk -F ' ' '/Your code has been rated at/ {print $7}' | cut -d'/' -f1)
         if (( $(echo "$SCORE >= 9.0" | bc -l) )); then
           echo "Pylint score ($SCORE) is acceptable."
           exit 0
