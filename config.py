@@ -33,7 +33,8 @@ class ConfigManager:
             'image_modification': True,
             'refresh_time': 900,
             'battery_max_voltage': 4.1,
-            'battery_min_voltage': 2.3
+            'battery_min_voltage': 2.3,
+            'time_zone': 'UTC'  # Add default time zone
         }
         self.config = self.default_config.copy()
         self.load_config()
@@ -100,4 +101,12 @@ class ConfigManager:
         """
         logger.info('[Config] setting battery min voltage to %s', battery_min_voltage)
         self.config['battery_min_voltage'] = battery_min_voltage
+        self.write_config()
+
+    def set_time_zone(self, time_zone):
+        """
+        Updates the configuration file with the new time zone.
+        """
+        logger.info('[Config] setting time zone to %s', time_zone)
+        self.config['time_zone'] = time_zone
         self.write_config()

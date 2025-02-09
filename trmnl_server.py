@@ -16,6 +16,7 @@ from collections import deque
 import signal
 import socket
 from io import BytesIO
+import pytz
 import requests
 import psutil
 from flask import Flask, request, jsonify, render_template_string, send_file
@@ -26,7 +27,7 @@ from gevent.ssl import SSLContext
 from config import ConfigManager
 
 ###################################################################################################
-SERVER_PORT = 83
+SERVER_PORT = 1183
 
 LOG_PERSISTANCE_INTERVAL = 20  # Number of entries before persisting to file
 LOG_SHOW_LAST_LINES = 20
@@ -385,8 +386,9 @@ def add_footer_to_image(src_image, wifi_percentage, battery_percentage):
                font=fonts["text_font"]
         )
 
-    # Draw date and time
-    date_time = datetime.datetime.now().strftime("%d.%m.%Y %H:%M")
+    # Get the current time in the configured time zone
+    time_zone = pytz.timezone(config_manager.config["time_zone"])
+    date_time = datetime.datetime.now(time_zone).strftime("%d.%m.%Y %H:%M")
     d.text(positions["date_time_position"], date_time, fill=background, font=fonts["text_font"])
 
     # Save the new image to a BytesIO object
