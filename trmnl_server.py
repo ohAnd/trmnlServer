@@ -27,7 +27,7 @@ from gevent.ssl import SSLContext
 from config import ConfigManager
 
 ###################################################################################################
-SERVER_PORT = 1183
+SERVER_PORT = 83
 
 LOG_PERSISTANCE_INTERVAL = 20  # Number of entries before persisting to file
 LOG_SHOW_LAST_LINES = 20

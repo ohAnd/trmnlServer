@@ -4,3 +4,4 @@ psutil==5.9.4
 PyYAML==6.0
 requests>=2.22.3
 pytz>=2025.1
+gevent>=24.11.1
