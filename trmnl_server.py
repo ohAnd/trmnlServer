@@ -32,6 +32,9 @@ SERVER_PORT = 83
 LOG_PERSISTANCE_INTERVAL = 20  # Number of entries before persisting to file
 LOG_SHOW_LAST_LINES = 20
 
+FOOTER_HEIGHT = 35 # modified BMP gets footer with this size
+BACKGROUND_TYPE = 1  # footer background: white - 1 black - 0
+
 ###################################################################################################
 ###################################################################################################
 LOGLEVEL = logging.DEBUG
@@ -302,14 +305,11 @@ def add_footer_to_image(src_image, wifi_percentage, battery_percentage):
     """
     # Load the source image
     img = Image.open(BytesIO(src_image.getvalue()))
-    footer_height = 35
     # Resize the source image to make space for the footer
-    img = img.crop((0, 0, img.width, img.height - footer_height))
+    img = img.crop((0, 0, img.width, img.height - FOOTER_HEIGHT))
 
-    # Define appearance
-    background = 1  # white - 1 black
     # Create a new image with extra space for the footer
-    new_img = Image.new('1', (img.width, img.height + footer_height), color=1 - background)
+    new_img = Image.new('1', (img.width, img.height + FOOTER_HEIGHT), color=1 - BACKGROUND_TYPE)
 
     # Paste the original image onto the new image
     new_img.paste(img, (0, 0))
@@ -343,53 +343,60 @@ def add_footer_to_image(src_image, wifi_percentage, battery_percentage):
     }
 
     # Draw line if background is white
-    if background == 0:
+    if BACKGROUND_TYPE == 0:
         d.line([(0, img.height + 1), (img.width, img.height + 1)], fill=0, width=2)
     else:
         width_left_side = 142 if battery_percentage != 255 else 100
         # Draw white rounded rectangles for left and right sides
         d.rounded_rectangle(
             [-10, img.height + 3, positions["wifi_text_position"][0] + width_left_side,
-             img.height + footer_height + 5],
+             img.height + FOOTER_HEIGHT + 5],
             fill=1, radius=5
         )
         d.rounded_rectangle(
             [positions["date_time_position"][0] - 8, img.height + 3, 810,
-             img.height + footer_height + 5],
+             img.height + FOOTER_HEIGHT + 5],
             fill=1, radius=5
         )
-        background = 0
 
-    # Draw WiFi icon and percentage
-    wifi_icon = "\uf1eb"
-    d.text(positions["wifi_icon_position"], wifi_icon, fill=background, font=fonts["icon_font"])
-    d.text(positions["wifi_text_position"], f"{round(wifi_percentage)} %", fill=background,
+    # Draw WiFi icon \uf1eb and percentage
+    d.text(
+        positions["wifi_icon_position"], "\uf1eb", fill=BACKGROUND_TYPE, font=fonts["icon_font"])
+    d.text(positions["wifi_text_position"], f"{round(wifi_percentage)} %", fill=BACKGROUND_TYPE,
            font=fonts["text_font"])
 
     # Draw battery icon and percentage
-    battery_icon = get_battery_icon(battery_percentage)
     if battery_percentage == 255:
         d.text(
-            positions["battery_icon_position"], "\uf244", fill=background, font=fonts["icon_font"]
+            positions["battery_icon_position"],
+            "\uf244", fill=BACKGROUND_TYPE,
+            font=fonts["icon_font"]
         )
         d.text(
-            (positions["battery_icon_position"][0] + 10, positions["battery_icon_position"][1]),
-               "\uf0e7", fill=background, font=fonts["icon_font"]
+            (positions["battery_icon_position"][0] + 10,positions["battery_icon_position"][1]),
+            "\uf0e7", fill=BACKGROUND_TYPE, font=fonts["icon_font"]
         )
     else:
         d.text(
             positions["battery_icon_position"],
-            battery_icon, fill=background, font=fonts["icon_font"]
+            get_battery_icon(battery_percentage), fill=BACKGROUND_TYPE, font=fonts["icon_font"]
         )
         d.text(
-            positions["battery_text_position"], f"{round(battery_percentage)} %", fill=background,
-               font=fonts["text_font"]
+            positions["battery_text_position"],
+            f"{round(battery_percentage)} %",
+            fill=BACKGROUND_TYPE,
+            font=fonts["text_font"]
         )
 
     # Get the current time in the configured time zone
     time_zone = pytz.timezone(config_manager.config["time_zone"])
     date_time = datetime.datetime.now(time_zone).strftime("%d.%m.%Y %H:%M")
-    d.text(positions["date_time_position"], date_time, fill=background, font=fonts["text_font"])
+    d.text(
+        positions["date_time_position"],
+        date_time,
+        fill=BACKGROUND_TYPE,
+        font=fonts["text_font"]
+    )
 
     # Save the new image to a BytesIO object
     img_io = BytesIO()
@@ -485,12 +492,6 @@ def get_wifi_signal_strength(rssi):
 def load_image(image_path):
     """
     Load an image from a local file path or a URL.
-
-    Args:
-        image_path (str): The path or URL of the image to load.
-
-    Returns:
-        BytesIO: The image data as a BytesIO object.
     """
     if image_path.startswith('http://') or image_path.startswith('https://'):
         response = requests.get(image_path, timeout=10)
@@ -522,7 +523,6 @@ def serve_image_screen():
 def serve_image_screen1():
     """
     Serve the current image for screen1.bmp.
-
     This function logs the request with a timestamp and context, then serves the 
     current image stored in `global_state['image']['current_send_image']` as a BMP file.
     """
