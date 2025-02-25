@@ -980,16 +980,17 @@ if __name__ == '__main__':
     key_file = os.path.join(current_dir, 'ssl/key.pem')
 
     if not os.path.exists(cert_file) or not key_file:
+        logger.debug('[Main] cert.pem and key.pem not found, generating new ones')
         os.system(
             f'openssl req -x509 -newkey rsa:4096 -keyout {key_file} -out {cert_file} '
-            f'-days 365 -nodes'
+            f'-days 365 -nodes '
             f'-subj "/C=US/ST=Georgia/L=Atlanta/O=trmnlServer/OU=webapp/CN={server_ip}"'
         )
 
     # Run HTTPS server on port SERVER_PORT
     context = SSLContext(ssl.PROTOCOL_TLS_SERVER)
     context.load_cert_chain(certfile=cert_file, keyfile=key_file)
-    logger.debug("Starting the server with gevent and SSL")
+    logger.debug("[Main] Starting the server with gevent and SSL")
     http_server = WSGIServer(
         ('0.0.0.0', SERVER_PORT),app, ssl_context=context, log=None, error_log=logger
     )
