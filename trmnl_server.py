@@ -33,7 +33,7 @@ LOG_PERSISTANCE_INTERVAL = 20  # Number of entries before persisting to file
 LOG_SHOW_LAST_LINES = 20
 
 FOOTER_HEIGHT = 35 # modified BMP gets footer with this size
-BACKGROUND_TYPE = 1  # footer background: white - 1 black - 0
+BACKGROUND_TYPE = 0  # footer background: white - 1 black - 0
 
 ###################################################################################################
 ###################################################################################################
@@ -69,7 +69,7 @@ def get_ip_address():
 
 # get the ip address of the server after startup of script
 server_ip = get_ip_address()
-print(f"Server will be running on IP: {server_ip} and port: {SERVER_PORT}")
+logger.info("Server will be running on IP: {server_ip} and port: {SERVER_PORT}")
 
 app = Flask(__name__)
 
@@ -307,16 +307,13 @@ def add_footer_to_image(src_image, wifi_percentage, battery_percentage):
     img = Image.open(BytesIO(src_image.getvalue()))
     # Resize the source image to make space for the footer
     img = img.crop((0, 0, img.width, img.height - FOOTER_HEIGHT))
-
     # Create a new image with extra space for the footer
-    new_img = Image.new('1', (img.width, img.height + FOOTER_HEIGHT), color=1 - BACKGROUND_TYPE)
-
+    new_img = Image.new('1', (img.width, img.height + FOOTER_HEIGHT), color = BACKGROUND_TYPE)
     # Paste the original image onto the new image
     new_img.paste(img, (0, 0))
-
     # Initialize ImageDraw
     d = ImageDraw.Draw(new_img)
-
+    logger.debug("[image modification] adding footer to image")
     # Load fonts
     try:
         fonts = {
@@ -343,7 +340,7 @@ def add_footer_to_image(src_image, wifi_percentage, battery_percentage):
     }
 
     # Draw line if background is white
-    if BACKGROUND_TYPE == 0:
+    if BACKGROUND_TYPE == 1:
         d.line([(0, img.height + 1), (img.width, img.height + 1)], fill=0, width=2)
     else:
         width_left_side = 142 if battery_percentage != 255 else 100
@@ -360,31 +357,31 @@ def add_footer_to_image(src_image, wifi_percentage, battery_percentage):
         )
 
     # Draw WiFi icon \uf1eb and percentage
-    d.text(
-        positions["wifi_icon_position"], "\uf1eb", fill=BACKGROUND_TYPE, font=fonts["icon_font"])
-    d.text(positions["wifi_text_position"], f"{round(wifi_percentage)} %", fill=BACKGROUND_TYPE,
-           font=fonts["text_font"])
+    d.text(positions["wifi_icon_position"],
+        "\uf1eb", fill=BACKGROUND_TYPE*-1, font=fonts["icon_font"])
+    d.text(positions["wifi_text_position"],
+           f"{round(wifi_percentage)} %", fill=BACKGROUND_TYPE*-1,font=fonts["text_font"])
 
     # Draw battery icon and percentage
     if battery_percentage == 255:
         d.text(
             positions["battery_icon_position"],
-            "\uf244", fill=BACKGROUND_TYPE,
+            "\uf244", fill=BACKGROUND_TYPE*-1,
             font=fonts["icon_font"]
         )
         d.text(
             (positions["battery_icon_position"][0] + 10,positions["battery_icon_position"][1]),
-            "\uf0e7", fill=BACKGROUND_TYPE, font=fonts["icon_font"]
+            "\uf0e7", fill=BACKGROUND_TYPE*-1, font=fonts["icon_font"]
         )
     else:
         d.text(
             positions["battery_icon_position"],
-            get_battery_icon(battery_percentage), fill=BACKGROUND_TYPE, font=fonts["icon_font"]
+            get_battery_icon(battery_percentage), fill=BACKGROUND_TYPE*-1, font=fonts["icon_font"]
         )
         d.text(
             positions["battery_text_position"],
             f"{round(battery_percentage)} %",
-            fill=BACKGROUND_TYPE,
+            fill=BACKGROUND_TYPE*-1,
             font=fonts["text_font"]
         )
 
@@ -394,7 +391,7 @@ def add_footer_to_image(src_image, wifi_percentage, battery_percentage):
     d.text(
         positions["date_time_position"],
         date_time,
-        fill=BACKGROUND_TYPE,
+        fill=BACKGROUND_TYPE*-1,
         font=fonts["text_font"]
     )
 

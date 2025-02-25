@@ -6,4 +6,4 @@ config.yaml
 ssl/key.pem
 db/clientLog.txt
 venv/*
-__pycache__/config.cpython-311.pyc
+__pycache__/*
