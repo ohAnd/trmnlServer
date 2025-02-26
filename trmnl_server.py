@@ -69,7 +69,7 @@ def get_ip_address():
 
 # get the ip address of the server after startup of script
 server_ip = get_ip_address()
-logger.info("Server will be running on IP: {server_ip} and port: {SERVER_PORT}")
+logger.info("Server will be running on IP: %s and port: %s", server_ip, SERVER_PORT)
 
 app = Flask(__name__)
 
