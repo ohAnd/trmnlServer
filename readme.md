@@ -1,4 +1,22 @@
-# TRMNL - Local Web Server
+# TRMNL - Local Web Server <!-- omit in toc -->
+
+## TOC <!-- omit in toc -->
+- [Overview](#overview)
+- [Features](#features)
+- [Endpoints](#endpoints)
+  - [Serve BMP Images](#serve-bmp-images)
+  - [API for Display](#api-for-display)
+  - [Logging](#logging)
+  - [Configuration Management](#configuration-management)
+  - [Server Logs](#server-logs)
+  - [Battery Data](#battery-data)
+- [Configuration](#configuration)
+- [Installation](#installation)
+  - [Running in Home Assistant as an Add-On](#running-in-home-assistant-as-an-add-on)
+  - [Manual Installation](#manual-installation)
+  - [Installation Using install.sh](#installation-using-installsh)
+    - [Running as a System Service](#running-as-a-system-service)
+
 
 ## Overview
 
@@ -87,6 +105,43 @@ The server uses a `config.yaml` file for configuration. If the file does not exi
 - **refresh_time**: Refresh time for the display.
 
 ## Installation
+
+### Running in Home Assistant as an Add-On
+
+You can find the HA addon here [`https://github.com/ohAnd/ha_addons`](https://github.com/ohAnd/ha_addons)
+
+---
+
+1. **Add the Repository**:
+   - Open Home Assistant.
+   - Navigate to **Settings** > **Add-ons** > **Add-on Store**.
+   - Click on the **⋮ (three dots)** in the top-right corner and select **Repositories**.
+   - Add the repository URL:  
+     `https://github.com/ohAnd/ha_addons`.
+     
+    or press the button:
+
+     [![Open your Home Assistant instance and show the add add-on repository dialog with a specific repository URL pre-filled.](https://my.home-assistant.io/badges/supervisor_add_addon_repository.svg)](https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2Fohand%2Fha_addons)
+
+
+2. **Install the Add-On**:
+   - Search for **TRMNL Server** in the Add-on Store.
+   - Click on the add-on and select **Install**.
+
+3. **Configure the Add-On**:
+   - After installation, go to the **Configuration** tab of the add-on.
+   - Adjust the settings (e.g., image path, refresh time) as needed.
+
+4. **Start the Add-On**:
+   - Go to the **Info** tab of the add-on.
+   - Click **Start** to launch the TRMNL Server.
+
+5. **Access the Server**:
+   - The server will be accessible at `http://<your_home_assistant_ip>:8081`.
+
+6. **Logs and Debugging**:
+   - Check the **Log** tab for any issues or to monitor the server's activity.
+
 
 ### Manual Installation
 1. **Clone the repository**:
