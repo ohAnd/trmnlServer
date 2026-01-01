@@ -15,6 +15,7 @@ from datetime import timedelta
 from collections import deque
 import signal
 import socket
+import ipaddress
 from io import BytesIO
 import pytz
 import requests
@@ -24,6 +25,50 @@ from PIL import Image, ImageDraw, ImageFont
 from werkzeug.serving import WSGIRequestHandler
 from gevent.pywsgi import WSGIServer
 from gevent.ssl import SSLContext
+
+
+class QuietWSGIServer(WSGIServer):
+    """
+    A WSGI server that suppresses specific SSL handshake errors.
+    """
+
+    def wrap_socket_and_handle(self, client_socket, address):
+        """
+        Wrap the socket and handle the request, suppressing specific SSL alerts.
+        """
+        try:
+            return super().wrap_socket_and_handle(client_socket, address)
+        except ssl.SSLError as e:
+            if any(
+                msg in str(e)
+                for msg in ["CERTIFICATE_UNKNOWN", "UNEXPECTED_EOF_WHILE_READING"]
+            ):
+                # Suppress the annoying SSL handshake errors
+                client_socket.close()
+                return
+            raise
+
+    def handle_error(self, socket, address):
+        """
+        Handle errors during request processing, suppressing specific SSL alerts.
+        """
+        import sys
+
+        exctype, value = sys.exc_info()[:2]
+        if exctype is ssl.SSLError and any(
+            msg in str(value)
+            for msg in ["CERTIFICATE_UNKNOWN", "UNEXPECTED_EOF_WHILE_READING"]
+        ):
+            # Suppress the annoying SSL handshake errors
+            return
+        super().handle_error(socket, address)
+
+
+from cryptography import x509
+from cryptography.x509.oid import NameOID
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
 from config import ConfigManager
 
 ###################################################################################################
@@ -32,46 +77,90 @@ SERVER_PORT = 83
 LOG_PERSISTANCE_INTERVAL = 20  # Number of entries before persisting to file
 LOG_SHOW_LAST_LINES = 20
 
-FOOTER_HEIGHT = 35 # modified BMP gets footer with this size
+FOOTER_HEIGHT = 35  # modified BMP gets footer with this size
 BACKGROUND_TYPE = 0  # footer background: white - 1 black - 0
 
 ###################################################################################################
 ###################################################################################################
 LOGLEVEL = logging.DEBUG
 logger = logging.getLogger(__name__)
-formatter = logging.Formatter("%(asctime)s %(levelname)s %(message)s",
-                              "%Y-%m-%d %H:%M:%S")
+formatter = logging.Formatter(
+    "%(asctime)s %(levelname)s %(message)s", "%Y-%m-%d %H:%M:%S"
+)
 streamhandler = logging.StreamHandler(sys.stdout)
 streamhandler.setFormatter(formatter)
 logger.addHandler(streamhandler)
 logger.setLevel(LOGLEVEL)
-logger.info('[Main] Starting trmnlServer')
+
+
+class SSLFilter(logging.Filter):
+    """
+    Filter to suppress SSL handshake errors in the logs.
+    """
+
+    def filter(self, record):
+        return "sslv3 alert certificate unknown" not in record.getMessage()
+
+
+logger.addFilter(SSLFilter())
+logger.info("[Main] Starting trmnlServer")
+
 
 ## helper
 def get_ip_address():
     """
     Get the local IP address of the machine.
 
-    This function creates a UDP socket and connects to a remote address to 
-    determine the local IP address. The remote address does not need to be 
+    This function creates a UDP socket and connects to a remote address to
+    determine the local IP address. The remote address does not need to be
     reachable. If an error occurs, it defaults to '127.0.0.1'.
     """
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     try:
         # doesn't even have to be reachable
-        s.connect(('10.254.254.254', 1))
+        s.connect(("10.254.254.254", 1))
         ip = s.getsockname()[0]
     except (IndexError, KeyError):
-        ip = '127.0.0.1'
+        ip = "127.0.0.1"
     finally:
         s.close()
     return ip
+
 
 # get the ip address of the server after startup of script
 server_ip = get_ip_address()
 logger.info("Server will be running on IP: %s and port: %s", server_ip, SERVER_PORT)
 
 app = Flask(__name__)
+
+
+@app.before_request
+def log_request_info():
+    """
+    Log information about every incoming request.
+    """
+    logger.info(
+        "[Request] %s %s from %s - User-Agent: %s",
+        request.method,
+        request.path,
+        request.remote_addr,
+        request.headers.get("User-Agent", "N/A"),
+    )
+
+
+@app.after_request
+def log_response_info(response):
+    """
+    Log information about every outgoing response.
+    """
+    logger.info(
+        "[Response] %s %s - Status: %s",
+        request.method,
+        request.path,
+        response.status_code,
+    )
+    return response
+
 
 start_time = time.time()
 
@@ -84,15 +173,15 @@ if len(os.sys.argv) > 1:
         print(f"Path {current_dir} does not exist. Using default path.")
     else:
         # create the ssl folder if not exists
-        ssl_folder = os.path.join(current_dir, 'ssl')
+        ssl_folder = os.path.join(current_dir, "ssl")
         if not os.path.exists(ssl_folder):
             os.makedirs(ssl_folder)
         # create the logs folder if not exists
-        logs_folder = os.path.join(current_dir, 'logs')
+        logs_folder = os.path.join(current_dir, "logs")
         if not os.path.exists(logs_folder):
             os.makedirs(logs_folder)
         # create the db folder if not exists
-        db_folder = os.path.join(current_dir, 'db')
+        db_folder = os.path.join(current_dir, "db")
         if not os.path.exists(db_folder):
             os.makedirs(db_folder)
 else:
@@ -103,91 +192,85 @@ config_manager = ConfigManager(current_dir)
 ## persistance
 # List to store logs
 logs = []
-log_file = os.path.join(current_dir, 'logs/server.log')
-db_file = os.path.join(current_dir, 'db/clientData.txt')
-db_client_log_file = os.path.join(current_dir, 'db/clientLog.txt')
+log_file = os.path.join(current_dir, "logs/server.log")
+db_file = os.path.join(current_dir, "db/clientData.txt")
+db_client_log_file = os.path.join(current_dir, "db/clientLog.txt")
 
 global_state = {
     ## initialize last shown image
-    'image': {
-        'bmp_send_switch': True,
-        'current_image_url': (
-            'https://' + get_ip_address() + ':' + str(SERVER_PORT) + '/image/dummy.bmp'
+    "image": {
+        "bmp_send_switch": True,
+        "current_image_url": (
+            "https://" + get_ip_address() + ":" + str(SERVER_PORT) + "/image/dummy.bmp"
         ),
-        'current_image_url_adapted': (
-            'https://' + get_ip_address() + ':' + str(SERVER_PORT) + '/image/dummy.bmp'
+        "current_image_url_adapted": (
+            "https://" + get_ip_address() + ":" + str(SERVER_PORT) + "/image/dummy.bmp"
         ),
         # In-memory object to store the last sent image as a blob
-        'current_orig_image': None,
-        'current_send_image': BytesIO()
+        "current_orig_image": None,
+        "current_send_image": BytesIO(),
     },
-    'server': {
-        'uptime': 0,
-        'cpu_load': 0,
-        'current_time': 0
-    },
-    'client': {
-        'battery_voltage': 0,
-        'battery_voltage_max': 0
-    }
+    "server": {"uptime": 0, "cpu_load": 0, "current_time": 0},
+    "client": {"battery_voltage": 0, "battery_voltage_max": 0},
 }
 
 # start client data
 last_client_data = {
-    'refresh_rate': 900,
-    'battery_voltage': config_manager.config["battery_max_voltage"],
-    'rssi': -100,
-    'last_contact': 0
+    "refresh_rate": 900,
+    "battery_voltage": config_manager.config["battery_max_voltage"],
+    "rssi": -100,
+    "last_contact": 0,
 }
 # In-memory database to store battery voltage and timestamp
-client_data_db = {
-    'battery_voltage': None,
-    'rssi': None,
-    'timestamp': None
-}
+client_data_db = {"battery_voltage": None, "rssi": None, "timestamp": None}
 # In-memory database to store the last 30 battery voltage and timestamp pairs
 client_data_db = deque(maxlen=30)
 client_log_db = deque(maxlen=30)
+
 
 def get_last_n_lines_from_log(file_path, n):
     """
     Retrieve the last n lines from the log file and combine them with formatted logs.
     """
     try:
-        with open(file_path, 'r', encoding='utf-8') as file:
+        with open(file_path, "r", encoding="utf-8") as file:
             lines = file.readlines()
             file_logs = lines[-n:] if len(lines) >= n else lines
     except FileNotFoundError:
         file_logs = []
 
     formatted_logs = [
-        f"{log['timestamp']} -- [{log['context']}] -- {log['info']}\n"
-        for log in logs
+        f"{log['timestamp']} -- [{log['context']}] -- {log['info']}\n" for log in logs
     ]
     combined_logs = file_logs + formatted_logs
     return combined_logs
+
 
 def persist_log():
     """
     Persist the logs to the log file and clear the in-memory logs.
     """
-    with open(log_file, 'a', encoding='utf-8') as log_file_handle:
+    with open(log_file, "a", encoding="utf-8") as log_file_handle:
         for log in logs:
-            log_file_handle.write(f"{log['timestamp']} -- [{log['context']}] -- {log['info']}\n")
+            log_file_handle.write(
+                f"{log['timestamp']} -- [{log['context']}] -- {log['info']}\n"
+            )
     logs.clear()
+
 
 def add_log_entry(log_context, info):
     """
     Add a log entry to the in-memory logs and persist if the interval is reached.
     """
     log_entry = {
-        'timestamp': datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-        'context': log_context,
-        'info': info
+        "timestamp": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "context": log_context,
+        "info": info,
     }
     logs.append(log_entry)
     if len(logs) >= LOG_PERSISTANCE_INTERVAL:
         persist_log()
+
 
 def add_client_data_entry(battery_voltage, rssi):
     """
@@ -196,29 +279,30 @@ def add_client_data_entry(battery_voltage, rssi):
     # get the last entry from the client_data_db and compare battery_voltage new and old values
     if client_data_db:
         last_entry = client_data_db[-1]
-        if last_entry['battery_voltage'] != battery_voltage:
+        if last_entry["battery_voltage"] != battery_voltage:
             entry = {
-                'battery_voltage': battery_voltage,
-                'rssi': rssi,
-                'timestamp': datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                "battery_voltage": battery_voltage,
+                "rssi": rssi,
+                "timestamp": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             }
             client_data_db.append(entry)
     else:
         entry = {
-            'battery_voltage': battery_voltage,
-            'rssi': rssi,
-            'timestamp': datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            "battery_voltage": battery_voltage,
+            "rssi": rssi,
+            "timestamp": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         }
         client_data_db.append(entry)
     if len(client_data_db) >= LOG_PERSISTANCE_INTERVAL:
         persist_client_data()
+
 
 def persist_client_data():
     """
     Persist the client data to the database file and clear the in-memory database,
     keeping only the last entry.
     """
-    with open(db_file, 'a', encoding='utf-8') as db_file_handle:
+    with open(db_file, "a", encoding="utf-8") as db_file_handle:
         for entry in client_data_db:
             db_file_handle.write(
                 f"{entry['timestamp']} -- bVolt: {entry['battery_voltage']}, "
@@ -229,6 +313,7 @@ def persist_client_data():
         client_data_db.clear()
         client_data_db.append(last_entry)
 
+
 def add_client_log_entry(log_entry):
     """
     Add a log entry to the client log database and persist if the interval is reached.
@@ -237,6 +322,7 @@ def add_client_log_entry(log_entry):
     client_log_db.append(log_entry)
     if len(client_log_db) >= LOG_PERSISTANCE_INTERVAL:
         persist_client_log_data()
+
 
 def persist_client_log_data():
     """
@@ -247,7 +333,7 @@ def persist_client_log_data():
     to the file. After writing, if there is more than one entry in the client_log_db, it retains
     only the last entry and clears the rest.
     """
-    with open(db_client_log_file, 'a', encoding='utf-8') as log_file_handle:
+    with open(db_client_log_file, "a", encoding="utf-8") as log_file_handle:
         for entry in client_log_db:
             log_file_handle.write(f"{entry}\n")
     if len(client_log_db) > 1:
@@ -255,33 +341,36 @@ def persist_client_log_data():
         client_log_db.clear()
         client_log_db.append(last_entry)
 
+
 def reading_client_data():
     """
     Read client data from the file and combine it with in-memory data.
     """
     client_data_db_read = []
     if os.path.exists(db_file):
-        with open(db_file, 'r', encoding='utf-8') as db_file_handle:
+        with open(db_file, "r", encoding="utf-8") as db_file_handle:
             lines = db_file_handle.readlines()
             for line in lines:
-                data = line.split(' -- ')
-                battery_voltage = float(data[1].split(',')[0].split(': ')[1])
-                rssi = int(data[1].split(',')[1].split(': ')[1])
+                data = line.split(" -- ")
+                battery_voltage = float(data[1].split(",")[0].split(": ")[1])
+                rssi = int(data[1].split(",")[1].split(": ")[1])
                 timestamp = data[0]
                 entry = {
-                    'battery_voltage': battery_voltage,
-                    'rssi': rssi,
-                    'timestamp': timestamp
+                    "battery_voltage": battery_voltage,
+                    "rssi": rssi,
+                    "timestamp": timestamp,
                 }
                 client_data_db_read.append(entry)
     # combine client_data_db and client_data_db_read only if more than 1 entry in client_data_db
     if len(client_data_db) > 1:
         client_data_db_read.extend(client_data_db)
     # sort data in client_data_db by timestamp
-    client_data_db_read = sorted(client_data_db_read, key=lambda x: x['timestamp'])
+    client_data_db_read = sorted(client_data_db_read, key=lambda x: x["timestamp"])
     return client_data_db_read
 
+
 ###################################################################################################
+
 
 def get_battery_icon(battery):
     """
@@ -298,6 +387,7 @@ def get_battery_icon(battery):
         return "\uf243"
     return "\uf244"
 
+
 # Modify the footer background to black and the font to white
 def add_footer_to_image(src_image, wifi_percentage, battery_percentage):
     """
@@ -308,7 +398,9 @@ def add_footer_to_image(src_image, wifi_percentage, battery_percentage):
     # Resize the source image to make space for the footer
     img = img.crop((0, 0, img.width, img.height - FOOTER_HEIGHT))
     # Create a new image with extra space for the footer
-    new_img = Image.new('1', (img.width, img.height + FOOTER_HEIGHT), color = BACKGROUND_TYPE)
+    new_img = Image.new(
+        "1", (img.width, img.height + FOOTER_HEIGHT), color=BACKGROUND_TYPE
+    )
     # Paste the original image onto the new image
     new_img.paste(img, (0, 0))
     # Initialize ImageDraw
@@ -318,13 +410,13 @@ def add_footer_to_image(src_image, wifi_percentage, battery_percentage):
     try:
         fonts = {
             "icon_font": ImageFont.truetype("web/fontawesome-webfont.ttf", 24),
-            "text_font": ImageFont.truetype("DejaVuSans-Bold.ttf", 14)
+            "text_font": ImageFont.truetype("DejaVuSans-Bold.ttf", 14),
         }
         logger.debug("[image modification] loading needed fonts")
     except IOError as e:
         fonts = {
             "icon_font": ImageFont.load_default(),
-            "text_font": ImageFont.load_default()
+            "text_font": ImageFont.load_default(),
         }
         logger.error("[image modification] loading default fonts - ERROR: %s", str(e))
 
@@ -336,7 +428,7 @@ def add_footer_to_image(src_image, wifi_percentage, battery_percentage):
         "wifi_text_position": (50, img.height + 7),
         "battery_icon_position": (104, img.height + 4),
         "battery_text_position": (140, img.height + 7),
-        "date_time_position": (img.width - 155, img.height + 7)
+        "date_time_position": (img.width - 155, img.height + 7),
     }
 
     # Draw line if background is white
@@ -346,43 +438,69 @@ def add_footer_to_image(src_image, wifi_percentage, battery_percentage):
         width_left_side = 142 if battery_percentage != 255 else 100
         # Draw white rounded rectangles for left and right sides
         d.rounded_rectangle(
-            [-10, img.height + 3, positions["wifi_text_position"][0] + width_left_side,
-             img.height + FOOTER_HEIGHT + 5],
-            fill=1, radius=5
+            [
+                -10,
+                img.height + 3,
+                positions["wifi_text_position"][0] + width_left_side,
+                img.height + FOOTER_HEIGHT + 5,
+            ],
+            fill=1,
+            radius=5,
         )
         d.rounded_rectangle(
-            [positions["date_time_position"][0] - 8, img.height + 3, 810,
-             img.height + FOOTER_HEIGHT + 5],
-            fill=1, radius=5
+            [
+                positions["date_time_position"][0] - 8,
+                img.height + 3,
+                810,
+                img.height + FOOTER_HEIGHT + 5,
+            ],
+            fill=1,
+            radius=5,
         )
 
     # Draw WiFi icon \uf1eb and percentage
-    d.text(positions["wifi_icon_position"],
-        "\uf1eb", fill=BACKGROUND_TYPE*-1, font=fonts["icon_font"])
-    d.text(positions["wifi_text_position"],
-           f"{round(wifi_percentage)} %", fill=BACKGROUND_TYPE*-1,font=fonts["text_font"])
+    d.text(
+        positions["wifi_icon_position"],
+        "\uf1eb",
+        fill=BACKGROUND_TYPE * -1,
+        font=fonts["icon_font"],
+    )
+    d.text(
+        positions["wifi_text_position"],
+        f"{round(wifi_percentage)} %",
+        fill=BACKGROUND_TYPE * -1,
+        font=fonts["text_font"],
+    )
 
     # Draw battery icon and percentage
     if battery_percentage == 255:
         d.text(
             positions["battery_icon_position"],
-            "\uf244", fill=BACKGROUND_TYPE*-1,
-            font=fonts["icon_font"]
+            "\uf244",
+            fill=BACKGROUND_TYPE * -1,
+            font=fonts["icon_font"],
         )
         d.text(
-            (positions["battery_icon_position"][0] + 10,positions["battery_icon_position"][1]),
-            "\uf0e7", fill=BACKGROUND_TYPE*-1, font=fonts["icon_font"]
+            (
+                positions["battery_icon_position"][0] + 10,
+                positions["battery_icon_position"][1],
+            ),
+            "\uf0e7",
+            fill=BACKGROUND_TYPE * -1,
+            font=fonts["icon_font"],
         )
     else:
         d.text(
             positions["battery_icon_position"],
-            get_battery_icon(battery_percentage), fill=BACKGROUND_TYPE*-1, font=fonts["icon_font"]
+            get_battery_icon(battery_percentage),
+            fill=BACKGROUND_TYPE * -1,
+            font=fonts["icon_font"],
         )
         d.text(
             positions["battery_text_position"],
             f"{round(battery_percentage)} %",
-            fill=BACKGROUND_TYPE*-1,
-            font=fonts["text_font"]
+            fill=BACKGROUND_TYPE * -1,
+            font=fonts["text_font"],
         )
 
     # Get the current time in the configured time zone
@@ -391,8 +509,8 @@ def add_footer_to_image(src_image, wifi_percentage, battery_percentage):
     d.text(
         positions["date_time_position"],
         date_time,
-        fill=BACKGROUND_TYPE*-1,
-        font=fonts["text_font"]
+        fill=BACKGROUND_TYPE * -1,
+        font=fonts["text_font"],
     )
 
     # Save the new image to a BytesIO object
@@ -407,15 +525,17 @@ def add_footer_to_image(src_image, wifi_percentage, battery_percentage):
 
     return img_io
 
+
 def get_and_modify_image(image_blob):
     """
     Retrieves and modifies an image by adding a footer with WiFi signal strength and battery
     percentage.
     """
     # Example usage
-    wifi_percentage = get_wifi_signal_strength(last_client_data['rssi'])
-    battery_percentage = get_battery_state(last_client_data['battery_voltage'])
-    return add_footer_to_image(image_blob,wifi_percentage, battery_percentage)
+    wifi_percentage = get_wifi_signal_strength(last_client_data["rssi"])
+    battery_percentage = get_battery_state(last_client_data["battery_voltage"])
+    return add_footer_to_image(image_blob, wifi_percentage, battery_percentage)
+
 
 def get_no_image():
     """
@@ -424,7 +544,9 @@ def get_no_image():
     a BytesIO object.
     """
     # Create a blank image with white background
-    img = Image.new('1', (800, 480), color=1)  # '1' mode for 1-bit pixels, black and white
+    img = Image.new(
+        "1", (800, 480), color=1
+    )  # '1' mode for 1-bit pixels, black and white
 
     # Initialize ImageDraw
     d = ImageDraw.Draw(img)
@@ -452,26 +574,31 @@ def get_no_image():
     img_io.seek(0)
     return img_io
 
+
 # calculate battery state
 def get_battery_state(battery_voltage):
     """
     Calculate the battery state based on the given battery voltage.
     """
-    if float(battery_voltage) > 4.6: # is chharging
+    if float(battery_voltage) > 4.6:  # is chharging
         return 255
     battery_state = round(
         (
-            (float(battery_voltage) - config_manager.config["battery_min_voltage"]) /
-            (
-                config_manager.config["battery_max_voltage"] -
-                config_manager.config["battery_min_voltage"]
-            )) * 100, 1
+            (float(battery_voltage) - config_manager.config["battery_min_voltage"])
+            / (
+                config_manager.config["battery_max_voltage"]
+                - config_manager.config["battery_min_voltage"]
+            )
         )
+        * 100,
+        1,
+    )
     if battery_state > 100:
         battery_state = 100
     elif battery_state < 0:
         battery_state = 0
     return battery_state
+
 
 # calculate wifi signal strength
 def get_wifi_signal_strength(rssi):
@@ -486,54 +613,65 @@ def get_wifi_signal_strength(rssi):
         quality = 2 * (rssi + 100)
     return quality
 
+
 def load_image(image_path):
     """
     Load an image from a local file path or a URL.
     """
-    if image_path.startswith('http://') or image_path.startswith('https://'):
+    if image_path.startswith("http://") or image_path.startswith("https://"):
         response = requests.get(image_path, timeout=10)
         response.raise_for_status()  # Raise an exception for HTTP errors
         return BytesIO(response.content)
-    with open(image_path, 'rb') as image_file:
+    with open(image_path, "rb") as image_file:
         return BytesIO(image_file.read())
+
 
 ###################################################################################################
 ## web server
 ## specific BMP serving
 
-@app.route('/image/screen.bmp', methods=['GET'])
+
+@app.route("/image/screen.bmp", methods=["GET"])
 def serve_image_screen():
     """
     Serve the current image as a BMP file.
     """
     # Log the request with timestamp and context
     add_log_entry(
-        'Request received at /image/screen.bmp',
-        f'serving image for IP: {request.remote_addr}'
+        "Request received at /image/screen.bmp",
+        f"serving image for IP: {request.remote_addr}",
     )
-    logger.info("[API] /image/screen.bmp - serving image for IP: %s", request.remote_addr)
+    logger.info(
+        "[API] /image/screen.bmp - serving image for IP: %s", request.remote_addr
+    )
     return send_file(
-        BytesIO(global_state['image']['current_send_image'].getvalue()), mimetype='image/bmp'
+        BytesIO(global_state["image"]["current_send_image"].getvalue()),
+        mimetype="image/bmp",
     )
 
-@app.route('/image/screen1.bmp', methods=['GET'])
+
+@app.route("/image/screen1.bmp", methods=["GET"])
 def serve_image_screen1():
     """
     Serve the current image for screen1.bmp.
-    This function logs the request with a timestamp and context, then serves the 
+    This function logs the request with a timestamp and context, then serves the
     current image stored in `global_state['image']['current_send_image']` as a BMP file.
     """
     # Log the request with timestamp and context
     add_log_entry(
-        'Request received at /image/screen1.bmp',
-        f'serving image for IP: {request.remote_addr}'
+        "Request received at /image/screen1.bmp",
+        f"serving image for IP: {request.remote_addr}",
     )
-    logger.info("[API] /image/screen1.bmp - serving image for IP: %s", request.remote_addr)
+    logger.info(
+        "[API] /image/screen1.bmp - serving image for IP: %s", request.remote_addr
+    )
     return send_file(
-        BytesIO(global_state['image']['current_send_image'].getvalue()), mimetype='image/bmp'
+        BytesIO(global_state["image"]["current_send_image"].getvalue()),
+        mimetype="image/bmp",
     )
 
-@app.route('/image/original.bmp', methods=['GET'])
+
+@app.route("/image/original.bmp", methods=["GET"])
 def serve_orig_image():
     """
     This function checks if the global variable `global_state['image']['current_orig_image']` is
@@ -541,24 +679,28 @@ def serve_orig_image():
     If `global_state['image']['current_orig_image']` is not set, it returns a placeholder image as
     a BMP file.
     """
-    if global_state['image']['current_orig_image']:
+    if global_state["image"]["current_orig_image"]:
         return send_file(
-            BytesIO(global_state['image']['current_orig_image'].getvalue()), mimetype='image/bmp'
+            BytesIO(global_state["image"]["current_orig_image"].getvalue()),
+            mimetype="image/bmp",
         )
-    return send_file(get_no_image(), mimetype='image/bmp')
+    return send_file(get_no_image(), mimetype="image/bmp")
 
-@app.route('/image/original1.bmp', methods=['GET'])
+
+@app.route("/image/original1.bmp", methods=["GET"])
 def serve_orig_image1():
     """
     Serve the original image if available, otherwise serve a default 'no image' placeholder.
     """
-    if global_state['image']['current_orig_image']:
+    if global_state["image"]["current_orig_image"]:
         return send_file(
-            BytesIO(global_state['image']['current_orig_image'].getvalue()), mimetype='image/bmp'
+            BytesIO(global_state["image"]["current_orig_image"].getvalue()),
+            mimetype="image/bmp",
         )
-    return send_file(get_no_image(), mimetype='image/bmp')
+    return send_file(get_no_image(), mimetype="image/bmp")
 
-@app.route('/test/adapted_image.bmp', methods=['GET'])
+
+@app.route("/test/adapted_image.bmp", methods=["GET"])
 def test_adapted_image():
     """
     Handles the request to generate and serve an adapted image.
@@ -569,27 +711,86 @@ def test_adapted_image():
     3. Returns the adapted image as a BMP file.
     """
     # Generate the adapted image
-    global_state['image']['current_send_image'] = get_and_modify_image(
-            BytesIO(global_state['image']['current_send_image'].read())
-        )
+    global_state["image"]["current_send_image"] = get_and_modify_image(
+        BytesIO(global_state["image"]["current_send_image"].read())
+    )
     # Log the request with timestamp and context
     add_log_entry(
-        'Request received at /test/adapted_image',
-        f'serving adapted image for IP: {request.remote_addr}'
+        "Request received at /test/adapted_image",
+        f"serving adapted image for IP: {request.remote_addr}",
     )
     return send_file(
-        BytesIO(global_state['image']['current_send_image'].getvalue()), mimetype='image/bmp'
-        )
+        BytesIO(global_state["image"]["current_send_image"].getvalue()),
+        mimetype="image/bmp",
+    )
+
 
 ## api
 
-@app.route('/api/display', methods=['GET'])
+
+@app.route("/api/setup", methods=["GET"])
+def api_setup():
+    """
+    Handle the /api/setup endpoint for initial client configuration.
+
+    This endpoint swaps the device's MAC address for an API key and Friendly ID.
+    Expected headers: ID (MAC address), FW-Version, Model
+
+    Response (success): {"status": 200, "api_key": "...", "friendly_id": "...",
+                         "image_url": "...", "message": "..."}
+    Response (failure): {"status": 404, ...} when MAC not registered
+    """
+    # Extract headers sent by ESP32 client
+    mac_address = request.headers.get("ID")
+    fw_version = request.headers.get("FW-Version")
+    model = request.headers.get("Model")
+
+    add_log_entry(
+        "Request received at /api/setup",
+        f"MAC: {mac_address}, FW: {fw_version}, Model: {model}",
+    )
+
+    # Generate or retrieve API key and friendly ID for this device
+    # For now, auto-register any device that connects
+    if mac_address:
+        # Generate a simple friendly ID from last 6 chars of MAC
+        friendly_id = mac_address.replace(":", "")[-6:].upper()
+
+        # Generate a simple API key (in production, use secure token generation)
+        api_key = f"key_{mac_address.replace(':', '')}"
+
+        response = {
+            "status": 200,
+            "api_key": api_key,
+            "friendly_id": friendly_id,
+            "image_url": (f"https://{get_ip_address()}:{SERVER_PORT}/image/dummy.bmp"),
+            "message": f"Device {friendly_id} registered successfully",
+        }
+
+        add_log_entry(
+            "Device registered",
+            f"MAC: {mac_address}, ID: {friendly_id}, API Key: {api_key}",
+        )
+        return jsonify(response), 200
+    else:
+        # No MAC address provided
+        response = {
+            "status": 404,
+            "api_key": None,
+            "friendly_id": None,
+            "image_url": None,
+            "message": "MAC address not provided in ID header",
+        }
+        return jsonify(response), 200
+
+
+@app.route("/api/display", methods=["GET"])
 def display():
     """
     Handle the /api/display endpoint.
 
     This function processes the incoming request, logs the request details, extracts specific
-    headers, updates client data, determines the image URL to respond with, and constructs a 
+    headers, updates client data, determines the image URL to respond with, and constructs a
     JSON response.
     """
     headers = request.headers
@@ -597,112 +798,136 @@ def display():
 
     # Log the request with timestamp and context
     add_log_entry(
-        'Request received at /api/display',
-        f'Headers: {dict(headers)},URL: {request.url}'
+        "Request received at /api/display",
+        f"Headers: {dict(headers)},URL: {request.url}",
     )
     logger.info("[API] /api/display - URL: %s", request.url)
 
     # Example of accessing specific headers
     # client_id = headers.get('ID')
     # access_token = headers.get('Access-Token')
-    refresh_rate = headers.get('Refresh-Rate')
-    battery_voltage = headers.get('Battery-Voltage')
+    refresh_rate = headers.get("Refresh-Rate")
+    battery_voltage = headers.get("Battery-Voltage")
     # fw_version = headers.get('FW-Version')
-    rssi = headers.get('RSSI')
+    rssi = headers.get("RSSI")
 
     if refresh_rate is not None or battery_voltage is not None or rssi is not None:
         # store the values for refresh_rate, battery_voltage, rssi in last_client_data
-        last_client_data['refresh_rate'] = int(refresh_rate)
-        last_client_data['battery_voltage'] = float(battery_voltage)
-        last_client_data['rssi'] = int(rssi)
-        last_client_data['last_contact'] = time.time()
+        last_client_data["refresh_rate"] = int(refresh_rate)
+        last_client_data["battery_voltage"] = float(battery_voltage)
+        last_client_data["rssi"] = int(rssi)
+        last_client_data["last_contact"] = time.time()
 
         add_client_data_entry(float(battery_voltage), int(rssi))
 
     # Respond with a JSON containing status and url
     # Determine the image URL based on the current request count
-    if global_state['image']['bmp_send_switch']:
-        global_state['image']['current_image_url'] = (
-            "https://" + get_ip_address() + ':' + str(SERVER_PORT) + '/image/original.bmp'
+    if global_state["image"]["bmp_send_switch"]:
+        global_state["image"]["current_image_url"] = (
+            "https://"
+            + get_ip_address()
+            + ":"
+            + str(SERVER_PORT)
+            + "/image/original.bmp"
         )
-        global_state['image']['current_image_url_adapted'] = (
-            "https://" + get_ip_address() + ':' + str(SERVER_PORT) + '/image/screen.bmp'
+        global_state["image"]["current_image_url_adapted"] = (
+            "https://" + get_ip_address() + ":" + str(SERVER_PORT) + "/image/screen.bmp"
         )
-        global_state['image']['bmp_send_switch'] = False
+        global_state["image"]["bmp_send_switch"] = False
     else:
-        global_state['image']['current_image_url'] =  (
-            "https://" + get_ip_address() + ':' + str(SERVER_PORT) + '/image/original1.bmp'
+        global_state["image"]["current_image_url"] = (
+            "https://"
+            + get_ip_address()
+            + ":"
+            + str(SERVER_PORT)
+            + "/image/original1.bmp"
         )
-        global_state['image']['current_image_url_adapted'] = (
-            "https://" + get_ip_address() + ':' + str(SERVER_PORT) + '/image/screen1.bmp'
+        global_state["image"]["current_image_url_adapted"] = (
+            "https://"
+            + get_ip_address()
+            + ":"
+            + str(SERVER_PORT)
+            + "/image/screen1.bmp"
         )
-        global_state['image']['bmp_send_switch'] = True
+        global_state["image"]["bmp_send_switch"] = True
 
     response = {
         "status": 0,
-        "image_url": global_state['image']['current_image_url_adapted'],
+        "image_url": global_state["image"]["current_image_url_adapted"],
+        "filename": datetime.datetime.now().strftime("%Y-%m-%dT%H:%M:%S"),
         "update_firmware": False,
         "firmware_url": "https://" + server_ip + ":" + str(SERVER_PORT) + "/fw/update",
         "refresh_rate": config_manager.config["refresh_time"],
         "reset_firmware": False,
-        "special_function": ""
+        "special_function": "",
+        "action": "",
     }
     # generate the footer image as a in memory image as time of requested at client if configured
     try:
-        global_state['image']['current_orig_image'] = load_image(
+        global_state["image"]["current_orig_image"] = load_image(
             config_manager.config["image_path"]
         )
     except FileNotFoundError:
-        with open('web/dummy.bmp', 'rb') as image_file:
-            global_state['image']['current_orig_image'] = BytesIO(image_file.read())
+        dummy_path = os.path.join(current_dir, "web/dummy.bmp")
+        with open(dummy_path, "rb") as image_file:
+            global_state["image"]["current_orig_image"] = BytesIO(image_file.read())
 
     if config_manager.config["image_modification"]:
-        global_state['image']['current_send_image'] = get_and_modify_image(
-                global_state['image']['current_orig_image']
-            )
+        global_state["image"]["current_send_image"] = get_and_modify_image(
+            global_state["image"]["current_orig_image"]
+        )
     else:
-        global_state['image']['current_send_image'] = global_state['image']['current_orig_image']
+        global_state["image"]["current_send_image"] = global_state["image"][
+            "current_orig_image"
+        ]
 
-    add_log_entry('send json /api/display', f'response: {response}')
+    add_log_entry("send json /api/display", f"response: {response}")
     return jsonify(response)
 
-@app.route('/api/log', methods=['POST'])
+
+@app.route("/api/log", methods=["POST"])
 def api_log():
     """
     Handles the /api/log endpoint to log client data.
 
-    This function processes a JSON request containing log entries, 
-    adds each log entry to the client log, and prints it. Additionally, 
+    This function processes a JSON request containing log entries,
+    adds each log entry to the client log, and prints it. Additionally,
     it logs the request with a timestamp and context.
     """
     content = request.json
-    logs_array = content.get('log').get('logs_array')
-    if logs_array:
-        for log_entry in logs_array:
-            add_client_log_entry(log_entry)
-            print(log_entry)
+    log_data = content.get("log")
+    if log_data:
+        logs_array = log_data.get("logs_array")
+        if logs_array:
+            for log_entry in logs_array:
+                add_client_log_entry(log_entry)
+                print(log_entry)
 
     # Log the request with timestamp and context
-    add_log_entry('Request received at /api/log', f'Content: {content}')
+    add_log_entry("Request received at /api/log", f"Content: {content}")
     return jsonify({"status": "logged"}), 200
 
-@app.route('/settings', methods=['GET'])
+
+@app.route("/settings", methods=["GET"])
 def get_settings():
     """
     Retrieve the current settings for the terminal server.
 
     This function returns a JSON response containing the current configuration
-    settings, including the path to the BMP file, the refresh rate, and the 
+    settings, including the path to the BMP file, the refresh rate, and the
     image manipulation settings.
     """
     # get the current path to BMP file
-    return jsonify({
-        'config_image_path': config_manager.config["image_path"],
-        'config_refresh_time': config_manager.config["refresh_time"],
-        'config_manipulate_image': config_manager.config["image_modification"]
-    })
+    return jsonify(
+        {
+            "config_image_path": config_manager.config["image_path"],
+            "config_refresh_time": config_manager.config["refresh_time"],
+            "config_manipulate_image": config_manager.config["image_modification"],
+        }
+    )
 
-@app.route('/settings/refreshtime', methods=['POST'])
+
+@app.route("/settings/refreshtime", methods=["POST"])
 def update_refresh_time():
     """
     Update the refresh time in the configuration.
@@ -712,16 +937,23 @@ def update_refresh_time():
     the updated configuration back to the `config.yaml` file.
     """
     data = request.json
-    new_refresh_time = data.get('refresh_rate')
+    new_refresh_time = data.get("refresh_rate")
 
     if new_refresh_time is not None:
         config_manager.set_refresh_time(new_refresh_time)
-        return jsonify(
-            {"status": "success", "new_image_path": config_manager.config["refresh_time"]}
-        ), 200
+        return (
+            jsonify(
+                {
+                    "status": "success",
+                    "new_image_path": config_manager.config["refresh_time"],
+                }
+            ),
+            200,
+        )
     return jsonify({"status": "error", "message": "Invalid refresh rate"}), 400
 
-@app.route('/settings/image_modification', methods=['POST'])
+
+@app.route("/settings/image_modification", methods=["POST"])
 def update_image_modification():
     """
     Update the image modification configuration.
@@ -733,16 +965,23 @@ def update_image_modification():
     If the value is not present, it returns an error response.
     """
     data = request.json
-    image_modification = data.get('image_modification')
+    image_modification = data.get("image_modification")
 
     if image_modification is not None:
         config_manager.set_image_modification(image_modification)
-        return jsonify(
-            {"status": "success", "new_image_path": config_manager.config["image_modification"]}
-        ), 200
+        return (
+            jsonify(
+                {
+                    "status": "success",
+                    "new_image_path": config_manager.config["image_modification"],
+                }
+            ),
+            200,
+        )
     return jsonify({"status": "error", "message": "Invalid new_image_path"}), 400
 
-@app.route('/settings/imagepath', methods=['POST'])
+
+@app.route("/settings/imagepath", methods=["POST"])
 def update_image_path():
     """
     is not None, it updates the image path in the configuration manager and returns a success
@@ -753,17 +992,23 @@ def update_image_path():
         or an error message if not.
     """
     data = request.json
-    new_image_path = data.get('bmp_path')
+    new_image_path = data.get("bmp_path")
 
     if new_image_path is not None:
         config_manager.set_image_path(new_image_path)
-        return jsonify(
-            {"status": "success", "new_image_path": config_manager.config["image_path"]}
-        ), 200
+        return (
+            jsonify(
+                {
+                    "status": "success",
+                    "new_image_path": config_manager.config["image_path"],
+                }
+            ),
+            200,
+        )
     return jsonify({"status": "error", "message": "Invalid new_image_path"}), 400
 
 
-@app.route('/server/log', methods=['GET'])
+@app.route("/server/log", methods=["GET"])
 def log_view():
     """
     Retrieve and format the last 30 lines from the log file.
@@ -776,9 +1021,10 @@ def log_view():
     last_30_lines = get_last_n_lines_from_log(log_file, LOG_SHOW_LAST_LINES)
     # Format logs as plain text
     formatted_logs = "\n".join(last_30_lines)
-    return formatted_logs, 200, {'Content-Type': 'text/plain'}
+    return formatted_logs, 200, {"Content-Type": "text/plain"}
 
-@app.route('/server/battery', methods=['GET'])
+
+@app.route("/server/battery", methods=["GET"])
 def battery_view():
     """
     Fetches battery data from the client database and returns it in JSON format.
@@ -786,102 +1032,118 @@ def battery_view():
     The function supports three types of queries:
     1. If the 'all' query parameter is provided, it returns all entries.
     2. If the 'from' and 'to' query parameters are provided, it returns entries within the
-       specified timestamp range. 
+       specified timestamp range.
     3. If no query parameters are provided, it returns entries for the current day.
     """
     client_data_db_read = reading_client_data()
     # Format logs as plain text
-    today = datetime.datetime.now().strftime('%Y-%m-%d')
+    today = datetime.datetime.now().strftime("%Y-%m-%d")
     response_data = []
-    if request.args.get('all') is not None:
+    if request.args.get("all") is not None:
         response_data = [
             {
-                'timestamp': entry['timestamp'],
-                'battery_voltage': entry['battery_voltage'],
-                'rssi': entry['rssi']
-            } for entry in client_data_db_read
+                "timestamp": entry["timestamp"],
+                "battery_voltage": entry["battery_voltage"],
+                "rssi": entry["rssi"],
+            }
+            for entry in client_data_db_read
         ]
-    elif request.args.get('from') is not None and request.args.get('to') is not None:
+    elif request.args.get("from") is not None and request.args.get("to") is not None:
 
-        from_timestamp = request.args.get('from')
-        to_timestamp = request.args.get('to')
+        from_timestamp = request.args.get("from")
+        to_timestamp = request.args.get("to")
         if from_timestamp and to_timestamp:
             response_data = [
-            {
-                'timestamp': entry['timestamp'],
-                'battery_voltage': entry['battery_voltage'],
-                'rssi': entry['rssi']
-            } for entry in client_data_db_read
-            if from_timestamp <= entry['timestamp'] <= to_timestamp
+                {
+                    "timestamp": entry["timestamp"],
+                    "battery_voltage": entry["battery_voltage"],
+                    "rssi": entry["rssi"],
+                }
+                for entry in client_data_db_read
+                if from_timestamp <= entry["timestamp"] <= to_timestamp
             ]
     else:
         response_data = [
             {
-                'timestamp': entry['timestamp'],
-                'battery_voltage': entry['battery_voltage'],
-                'rssi': entry['rssi']
-            } for entry in client_data_db_read if entry['timestamp'].startswith(today)
+                "timestamp": entry["timestamp"],
+                "battery_voltage": entry["battery_voltage"],
+                "rssi": entry["rssi"],
+            }
+            for entry in client_data_db_read
+            if entry["timestamp"].startswith(today)
         ]
     return jsonify(response_data), 200
 
-@app.route('/status', methods=['GET'])
+
+@app.route("/status", methods=["GET"])
 def get_status():
     """
     Retrieve the current status of the server and client.
 
-    This function gathers various metrics about the server's uptime, CPU load, 
-    and current time. It also retrieves client data, including battery voltage, 
-    WiFi signal strength, and the last contact timestamp. If the client data is 
+    This function gathers various metrics about the server's uptime, CPU load,
+    and current time. It also retrieves client data, including battery voltage,
+    WiFi signal strength, and the last contact timestamp. If the client data is
     not available, it reads the last stored data from a file.
     """
     uptime_seconds = time.time() - start_time
     uptime_timedelta = timedelta(seconds=uptime_seconds)
-    uptime_str = str(uptime_timedelta).split('.', maxsplit=1)[0]  # Remove microseconds
+    uptime_str = str(uptime_timedelta).split(".", maxsplit=1)[0]  # Remove microseconds
     cpu_load = psutil.cpu_percent(interval=1)
-    current_time = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime())
+    current_time = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
     # global client_data_db
     # client date are not available use last stored data from file
-    if last_client_data['last_contact'] == 0:
+    if last_client_data["last_contact"] == 0:
         client_data_db_read = reading_client_data()
         try:
-            last_client_data['battery_voltage'] = client_data_db_read[-1]['battery_voltage']
-            last_client_data['rssi'] = client_data_db_read[-1]['rssi']
-            last_client_data['last_contact'] = client_data_db_read[-1]['timestamp']
+            last_client_data["battery_voltage"] = client_data_db_read[-1][
+                "battery_voltage"
+            ]
+            last_client_data["rssi"] = client_data_db_read[-1]["rssi"]
+            last_client_data["last_contact"] = client_data_db_read[-1]["timestamp"]
         except (IndexError, KeyError):
-            last_client_data['battery_voltage'] = 0
-            last_client_data['rssi'] = 0
-            last_client_data['last_contact'] = 1735686000
+            last_client_data["battery_voltage"] = 0
+            last_client_data["rssi"] = 0
+            last_client_data["last_contact"] = 1735686000
 
-    return jsonify({
-        'server': {
-            'uptime': uptime_str,
-            'cpu_load': round(cpu_load, 1),
-            'current_time': current_time
-        },
-        'client': {
-            'battery_voltage': round(last_client_data['battery_voltage'], 2),
-            'battery_voltage_max': config_manager.config["battery_max_voltage"],
-            'battery_voltage_min': config_manager.config["battery_min_voltage"],
-            'battery_state': get_battery_state(last_client_data['battery_voltage']),
-            'wifi_signal': last_client_data['rssi'],
-            'wifi_signal_strength': get_wifi_signal_strength(last_client_data['rssi']),
-            'refresh_time': last_client_data['refresh_rate'],
-            'last_contact': last_client_data['last_contact'],
-            'current_image_url': global_state['image']['current_image_url'],
-            'current_image_url_adapted': global_state['image']['current_image_url_adapted']
-        },
-        'client_data_db': [
-            {
-                'battery_voltage': entry['battery_voltage'],
-                'rssi': entry['rssi'],
-                'timestamp': entry['timestamp']
-            } for entry in client_data_db
-        ]
-    })
+    return jsonify(
+        {
+            "server": {
+                "uptime": uptime_str,
+                "cpu_load": round(cpu_load, 1),
+                "current_time": current_time,
+            },
+            "client": {
+                "battery_voltage": round(last_client_data["battery_voltage"], 2),
+                "battery_voltage_max": config_manager.config["battery_max_voltage"],
+                "battery_voltage_min": config_manager.config["battery_min_voltage"],
+                "battery_state": get_battery_state(last_client_data["battery_voltage"]),
+                "wifi_signal": last_client_data["rssi"],
+                "wifi_signal_strength": get_wifi_signal_strength(
+                    last_client_data["rssi"]
+                ),
+                "refresh_time": last_client_data["refresh_rate"],
+                "last_contact": last_client_data["last_contact"],
+                "current_image_url": global_state["image"]["current_image_url"],
+                "current_image_url_adapted": global_state["image"][
+                    "current_image_url_adapted"
+                ],
+            },
+            "client_data_db": [
+                {
+                    "battery_voltage": entry["battery_voltage"],
+                    "rssi": entry["rssi"],
+                    "timestamp": entry["timestamp"],
+                }
+                for entry in client_data_db
+            ],
+        }
+    )
+
 
 ## web pages
 
-@app.route('/', methods=['GET'])
+
+@app.route("/", methods=["GET"])
 def main_page():
     """
     Renders the main page of the web application.
@@ -889,15 +1151,18 @@ def main_page():
     This function reads the content of the 'index.html' file located in the 'web' directory
     and returns it as a rendered template string.
     """
-    with open('web/index.html', 'r', encoding='utf-8') as file:
+    index_path = os.path.join(current_dir, "web/index.html")
+    with open(index_path, "r", encoding="utf-8") as file:
         return render_template_string(file.read())
 
-@app.route('/image/dummy.bmp', methods=['GET'])
+
+@app.route("/image/dummy.bmp", methods=["GET"])
 def dummy_image():
     """
     Sends a dummy BMP image file to the client.
     """
-    return send_file('web/dummy.bmp', mimetype='image/bmp')
+    dummy_path = os.path.join(current_dir, "web/dummy.bmp")
+    return send_file(dummy_path, mimetype="image/bmp")
 
 
 def handle_exit(signum, frame):
@@ -908,9 +1173,11 @@ def handle_exit(signum, frame):
     that logs and client data are persisted before the program exits.
     """
     print(
-        "\nKill signal received with signum: '" +
-        str(signum) + "' and frame: '" +
-        str(frame) + "' !"
+        "\nKill signal received with signum: '"
+        + str(signum)
+        + "' and frame: '"
+        + str(frame)
+        + "' !"
     )
     print("Signal received, persisting logs and client data...")
     persist_log()
@@ -919,8 +1186,10 @@ def handle_exit(signum, frame):
     print("Data persisted. Exiting...")
     sys.exit(0)
 
+
 signal.signal(signal.SIGINT, handle_exit)
 signal.signal(signal.SIGTERM, handle_exit)
+
 
 class SSLRequestHandler(WSGIRequestHandler):
     """
@@ -932,6 +1201,7 @@ class SSLRequestHandler(WSGIRequestHandler):
             Overrides the handle method to catch and ignore SSL protocol shutdown errors.
             If any other SSL error occurs, it re-raises the exception.
     """
+
     def handle(self):
         """
         Handle the incoming request.
@@ -946,10 +1216,11 @@ class SSLRequestHandler(WSGIRequestHandler):
         try:
             super().handle()
         except ssl.SSLError as e:
-            if e.reason == 'PROTOCOL_IS_SHUTDOWN':
+            if e.reason == "PROTOCOL_IS_SHUTDOWN":
                 pass  # Ignore SSL protocol shutdown errors
             else:
                 raise
+
 
 # if __name__ == '__main__':
 #     # Start the server
@@ -970,26 +1241,93 @@ class SSLRequestHandler(WSGIRequestHandler):
 #     context.load_cert_chain(certfile=cert_file, keyfile=key_file)
 #     app.run(host='0.0.0.0', port=SERVER_PORT, ssl_context=context, debug=False)
 
-if __name__ == '__main__':
-    global_state['image']['bmp_send_switch'] = True
-    # Generate a self-signed certificate and key
-    cert_file = os.path.join(current_dir, 'ssl/cert.pem')
-    key_file = os.path.join(current_dir, 'ssl/key.pem')
 
-    if not os.path.exists(cert_file) or not key_file:
-        logger.debug('[Main] cert.pem and key.pem not found, generating new ones')
-        os.system(
-            f'openssl req -x509 -newkey rsa:4096 -keyout {key_file} -out {cert_file} '
-            f'-days 365 -nodes '
-            f'-subj "/C=US/ST=Georgia/L=Atlanta/O=trmnlServer/OU=webapp/CN={server_ip}"'
+def generate_self_signed_cert(cert_file, key_file, server_ip):
+    """
+    Generate a self-signed certificate and key using the cryptography library.
+    """
+    # Generate key
+    key = rsa.generate_private_key(
+        public_exponent=65537,
+        key_size=4096,
+    )
+
+    # Generate cert
+    subject = issuer = x509.Name(
+        [
+            x509.NameAttribute(NameOID.COUNTRY_NAME, "US"),
+            x509.NameAttribute(NameOID.STATE_OR_PROVINCE_NAME, "Georgia"),
+            x509.NameAttribute(NameOID.LOCALITY_NAME, "Atlanta"),
+            x509.NameAttribute(NameOID.ORGANIZATION_NAME, "trmnlServer"),
+            x509.NameAttribute(NameOID.ORGANIZATIONAL_UNIT_NAME, "webapp"),
+            x509.NameAttribute(NameOID.COMMON_NAME, server_ip),
+        ]
+    )
+    cert = (
+        x509.CertificateBuilder()
+        .subject_name(subject)
+        .issuer_name(issuer)
+        .public_key(key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(datetime.datetime.now(datetime.timezone.utc))
+        .not_valid_after(
+            # Our certificate will be valid for 10 years
+            datetime.datetime.now(datetime.timezone.utc)
+            + datetime.timedelta(days=3650)
         )
+        .add_extension(
+            x509.SubjectAlternativeName(
+                [
+                    x509.DNSName("localhost"),
+                    x509.IPAddress(ipaddress.ip_address(server_ip)),
+                ]
+            ),
+            critical=False,
+        )
+        .sign(key, hashes.SHA256())
+    )
+
+    # Ensure directory exists
+    os.makedirs(os.path.dirname(cert_file), exist_ok=True)
+
+    # Write to disk
+    with open(key_file, "wb") as f:
+        f.write(
+            key.private_bytes(
+                encoding=serialization.Encoding.PEM,
+                format=serialization.PrivateFormat.TraditionalOpenSSL,
+                encryption_algorithm=serialization.NoEncryption(),
+            )
+        )
+    with open(cert_file, "wb") as f:
+        f.write(cert.public_bytes(serialization.Encoding.PEM))
+
+
+if __name__ == "__main__":
+    global_state["image"]["bmp_send_switch"] = True
+    # Generate a self-signed certificate and key
+    cert_file = os.path.join(current_dir, "ssl/cert.pem")
+    key_file = os.path.join(current_dir, "ssl/key.pem")
+
+    if not os.path.exists(cert_file) or not os.path.exists(key_file):
+        logger.debug("[Main] cert.pem and key.pem not found, generating new ones")
+        try:
+            generate_self_signed_cert(cert_file, key_file, server_ip)
+        except Exception as e:
+            logger.error(f"[Main] Failed to generate certificates: {e}")
+            # Fallback to openssl if cryptography fails for some reason
+            os.system(
+                f"openssl req -x509 -newkey rsa:4096 -keyout {key_file} -out {cert_file} "
+                f"-days 365 -nodes "
+                f'-subj "/C=US/ST=Georgia/L=Atlanta/O=trmnlServer/OU=webapp/CN={server_ip}"'
+            )
 
     # Run HTTPS server on port SERVER_PORT
     context = SSLContext(ssl.PROTOCOL_TLS_SERVER)
     context.load_cert_chain(certfile=cert_file, keyfile=key_file)
     logger.debug("[Main] Starting the server with gevent and SSL")
-    http_server = WSGIServer(
-        ('0.0.0.0', SERVER_PORT),app, ssl_context=context, log=None, error_log=logger
+    http_server = QuietWSGIServer(
+        ("0.0.0.0", SERVER_PORT), app, ssl_context=context, log=None, error_log=logger
     )
     http_server.serve_forever()
 # %%
