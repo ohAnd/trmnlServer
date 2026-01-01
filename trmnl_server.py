@@ -408,9 +408,18 @@ def add_footer_to_image(src_image, wifi_percentage, battery_percentage):
     logger.debug("[image modification] adding footer to image")
     # Load fonts
     try:
+        # Use absolute paths for fonts
+        icon_font_path = os.path.join(base_path, "web", "fontawesome-webfont.ttf")
+        # Try system fonts for text (Arial Bold available on Windows)
+        try:
+            text_font = ImageFont.truetype("arialbd.ttf", 14)
+        except:
+            # Fallback to regular Arial
+            text_font = ImageFont.truetype("arial.ttf", 14)
+
         fonts = {
-            "icon_font": ImageFont.truetype("web/fontawesome-webfont.ttf", 24),
-            "text_font": ImageFont.truetype("DejaVuSans-Bold.ttf", 14),
+            "icon_font": ImageFont.truetype(icon_font_path, 24),
+            "text_font": text_font,
         }
         logger.debug("[image modification] loading needed fonts")
     except IOError as e:
@@ -856,6 +865,7 @@ def display():
         "image_url": global_state["image"]["current_image_url_adapted"],
         "filename": datetime.datetime.now().strftime("%Y-%m-%dT%H:%M:%S"),
         "update_firmware": False,
+        "maximum_compatibility": True,
         "firmware_url": "https://" + server_ip + ":" + str(SERVER_PORT) + "/fw/update",
         "refresh_rate": config_manager.config["refresh_time"],
         "reset_firmware": False,
