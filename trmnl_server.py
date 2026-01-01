@@ -407,27 +407,43 @@ def add_footer_to_image(src_image, wifi_percentage, battery_percentage):
     d = ImageDraw.Draw(new_img)
     logger.debug("[image modification] adding footer to image")
     # Load fonts
+    # Load icon font (FontAwesome)
+    icon_font_path = os.path.join(base_path, "web", "fontawesome-webfont.ttf")
+    icon_font = None
     try:
-        # Use absolute paths for fonts
-        icon_font_path = os.path.join(base_path, "web", "fontawesome-webfont.ttf")
-        # Try system fonts for text (Arial Bold available on Windows)
-        try:
-            text_font = ImageFont.truetype("arialbd.ttf", 14)
-        except:
-            # Fallback to regular Arial
-            text_font = ImageFont.truetype("arial.ttf", 14)
+        icon_font = ImageFont.truetype(icon_font_path, 24)
+        logger.debug("[image modification] loaded FontAwesome from %s", icon_font_path)
+    except Exception as e:
+        logger.warning("[image modification] could not load FontAwesome: %s", str(e))
+        icon_font = ImageFont.load_default()
 
-        fonts = {
-            "icon_font": ImageFont.truetype(icon_font_path, 24),
-            "text_font": text_font,
-        }
-        logger.debug("[image modification] loading needed fonts")
-    except IOError as e:
-        fonts = {
-            "icon_font": ImageFont.load_default(),
-            "text_font": ImageFont.load_default(),
-        }
-        logger.error("[image modification] loading default fonts - ERROR: %s", str(e))
+    # Load text font - try multiple options for cross-platform support
+    text_font = None
+    font_candidates = [
+        "arialbd.ttf",  # Windows
+        "arial.ttf",  # Windows
+        "/usr/share/fonts/ttf-dejavu/DejaVuSans-Bold.ttf",  # Alpine Linux
+        "/usr/share/fonts/ttf-dejavu/DejaVuSans.ttf",  # Alpine Linux
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",  # Debian/Ubuntu
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",  # Debian/Ubuntu
+    ]
+
+    for font_path in font_candidates:
+        try:
+            text_font = ImageFont.truetype(font_path, 14)
+            logger.debug("[image modification] loaded text font: %s", font_path)
+            break
+        except:
+            continue
+
+    if text_font is None:
+        logger.warning("[image modification] no system fonts available, using default")
+        text_font = ImageFont.load_default()
+
+    fonts = {
+        "icon_font": icon_font,
+        "text_font": text_font,
+    }
 
     # Define positions
     positions = {
@@ -437,7 +453,6 @@ def add_footer_to_image(src_image, wifi_percentage, battery_percentage):
         "wifi_text_position": (50, img.height + 7),
         "battery_icon_position": (104, img.height + 4),
         "battery_text_position": (140, img.height + 7),
-        "date_time_position": (img.width - 155, img.height + 7),
     }
 
     # Draw line if background is white
@@ -456,16 +471,17 @@ def add_footer_to_image(src_image, wifi_percentage, battery_percentage):
             fill=1,
             radius=5,
         )
-        d.rounded_rectangle(
-            [
-                positions["date_time_position"][0] - 8,
-                img.height + 3,
-                810,
-                img.height + FOOTER_HEIGHT + 5,
-            ],
-            fill=1,
-            radius=5,
-        )
+        # Right side pill for date/time - will be calculated after text width is known
+        # d.rounded_rectangle(
+        #     [
+        #         positions["date_time_position"][0] - 8,
+        #         img.height + 3,
+        #         810,
+        #         img.height + FOOTER_HEIGHT + 5,
+        #     ],
+        #     fill=1,
+        #     radius=5,
+        # )
 
     # Draw WiFi icon \uf1eb and percentage
     d.text(
@@ -515,8 +531,34 @@ def add_footer_to_image(src_image, wifi_percentage, battery_percentage):
     # Get the current time in the configured time zone
     time_zone = pytz.timezone(config_manager.config["time_zone"])
     date_time = datetime.datetime.now(time_zone).strftime("%d.%m.%Y %H:%M")
+
+    # Calculate text width for right alignment
+    try:
+        bbox = d.textbbox((0, 0), date_time, font=fonts["text_font"])
+        text_width = bbox[2] - bbox[0]
+    except:
+        # Fallback for older PIL versions
+        text_width = len(date_time) * 8  # Rough estimate
+
+    # Right-align with 10px margin from right edge
+    date_time_x = img.width - text_width - 10
+    date_time_y = img.height + 7
+
+    # Draw the right-side pill background (only if BACKGROUND_TYPE is black)
+    if BACKGROUND_TYPE == 0:
+        d.rounded_rectangle(
+            [
+                date_time_x - 8,
+                img.height + 3,
+                img.width + 10,
+                img.height + FOOTER_HEIGHT + 5,
+            ],
+            fill=1,
+            radius=5,
+        )
+
     d.text(
-        positions["date_time_position"],
+        (date_time_x, date_time_y),
         date_time,
         fill=BACKGROUND_TYPE * -1,
         font=fonts["text_font"],
